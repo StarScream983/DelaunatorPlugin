@@ -29,14 +29,11 @@ public:
 	}
 };
 
-struct FGeoStereographic
-{
-public:
-};
-
 struct FGeoRotation
 {
 public:
+
+	FGeoRotation() {};
 	// Pivot in degrees
 	FGeoRotation(FVector2D pivot){
 		Rotate = RotateRadians(pivot.X, pivot.Y);
@@ -44,7 +41,7 @@ public:
 
 	std::function<FVector2D(FVector2D)> Rotate;
 
-	// the the main function, will not be called
+	// the main function, will not be called
 	FVector2D Forward(FVector2D coordinates)
 	{
 		// call Rotate with "coordinates"
@@ -54,7 +51,7 @@ public:
 	// the invert of the main function, this one will be called
 	FVector2D Invert(FVector2D coordinates)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("GEO INVERT !!"));
+		//UE_LOG(LogTemp, Warning, TEXT("GEO INVERT !!"));
 		coordinates = Rotate(coordinates);
 		return coordinates * DEGREES;
 	}
@@ -123,6 +120,70 @@ public:
 			return FVector2D(FMath::Atan2(y * cosDeltaGamma + z * sinDeltaGamma, x * cosDeltaPhi + k * sinDeltaPhi),
 				FMath::Asin(k * cosDeltaPhi - x * sinDeltaPhi));
 		};
+	}
+};
+
+struct FGeoStereographic
+{
+public:
+	FGeoStereographic() {};
+
+	std::function<FVector2D(FVector2D)> project;
+	double k, // scale 150
+		x /*480.*/, y /*250*/, // translate
+		lambda /*0.*/, phi /*0.*/, // center
+
+		// pre-rotate
+		deltaLambda /*0.*/, deltaPhi /*0.*/, deltaGamma /*0.*/;
+	std::function<FVector2D(FVector2D)> rotate;
+
+	double alpha /*0.*/, // post-rotate angle
+		sx, sy; // reflectX, reflectY, both 1.
+
+	std::function<FVector2D(FVector2D)> StereoGraphicRaw()
+	{
+		return [](FVector2D point) {
+			double cy = FMath::Cos(point.Y), k = 1 + FMath::Cos(point.X) * cy;
+			return FVector2D(cy * FMath::Sin(point.X) / k, FMath::Sin(point.Y) / k);
+			};
+	}
+
+	std::function<FVector2D(FVector2D)> scaleTranslate(double k, double dx, double dy, double sx, double sy)
+	{
+		return [=](FVector2D point) {
+			point.X *= sx; point.Y *= sy;
+			return FVector2D((point.X - dx) / k * sx, (dy - point.Y) / k * sy);
+			};
+	}
+
+	std::function<FVector2D(FVector2D)> scaleTranslateRotate(double k, double dx, double dy, double sx, double sy, double alpha)
+	{
+		if (alpha == 0.) return scaleTranslate(k, dx, dy, sx, sy);
+		double cosAlpha = FMath::Cos(alpha),
+			sinAlpha = FMath::Sin(alpha),
+			a = cosAlpha * k,
+			b = sinAlpha * k;
+		return [=](FVector2D point) {
+			point.X *= sx; point.Y *= sy;
+			return FVector2D(a * point.X - b * point.Y + dx, dy - b * point.X - a * point.Y);
+			};
+	}
+};
+
+struct MyStruct {
+public:
+	int a;
+	double b;
+
+	// Define a member function that returns a std::function
+	std::function<void()> getFunction() {
+		int da = 2;
+		double db = 2.1;
+		// [=, this] Captures member variables 'a' and 'b' of the struct and da, db in getFunction by value in the lambda
+		return [=, this]() {
+			// Inside the lambda, you can access 'a' and 'b' directly
+			//UE_LOG(LogTemp, Warning, TEXT("a: %d, b: %f"), a+da, b+db);
+			};
 	}
 };
 

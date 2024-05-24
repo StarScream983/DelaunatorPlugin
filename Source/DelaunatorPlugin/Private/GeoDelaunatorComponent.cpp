@@ -20,7 +20,7 @@ void UGeoDelaunatorComponent::BeginPlay()
 	Super::BeginPlay();
 
 	//TEST
-	std::vector<FVector2D> Points = {FVector2D(45., 60.), FVector2D(21., 91.)};
+	std::vector<FVector2D> Points = {FVector2D(25., 90.), FVector2D(21., 91.)};
 	GeoDelaunayFrom(Points);
 }
 
@@ -50,7 +50,14 @@ UDelaunator* UGeoDelaunatorComponent::GeoDelaunayFrom(std::vector<FVector2D> inP
 	FVector2D result = r.Invert(FVector2D(180., 0.));
 
 	//TEST
-	UE_LOG(LogTemp, Warning, TEXT("Result: %s"), *result.ToString());
+	//UE_LOG(LogTemp, Warning, TEXT("Result: %s"), *result.ToString());
+
+	MyStruct TestStruct;
+	TestStruct.a = 2;
+	TestStruct.b = 5.6;
+
+	auto func = TestStruct.getFunction();
+	func();
 
 	return nullptr;
 }
