@@ -31,7 +31,7 @@ public:
 
 struct FGeoRotation
 {
-public:
+//public:
 
 	FGeoRotation() {};
 	// Pivot in degrees
@@ -56,7 +56,7 @@ public:
 		return coordinates * DEGREES;
 	}
 
-	std::function<FVector2D(FVector2D)> RotateRadians(double deltaLambda, double deltaPhi, double deltaGamma = 0.)
+	static std::function<FVector2D(FVector2D)> RotateRadians(double deltaLambda, double deltaPhi, double deltaGamma = 0.)
 	{
 		deltaLambda = FMath::Fmod(deltaLambda, _TWO_PI);
 		if (deltaLambda != 0.)
@@ -83,7 +83,7 @@ public:
 		}
 	}
 
-	std::function<FVector2D(FVector2D)> RotationIdentity()
+	static std::function<FVector2D(FVector2D)> RotationIdentity()
 	{
 		return [](FVector2D lambdaPhi) {
 				double lambda = lambdaPhi.X;
@@ -92,7 +92,7 @@ public:
 			};
 	}
 
-	std::function<FVector2D(FVector2D)> RotationLambda(double deltaLambda)
+	static std::function<FVector2D(FVector2D)> RotationLambda(double deltaLambda)
 	{
 		return [deltaLambda](FVector2D coordinates) {
 			double lambda = coordinates.X;
@@ -102,7 +102,7 @@ public:
 			};
 	}
 
-	std::function<FVector2D(FVector2D)> RotationPhiGamma(double deltaPhi, double deltaGamma = 0.)
+	static std::function<FVector2D(FVector2D)> RotationPhiGamma(double deltaPhi, double deltaGamma = 0.)
 	{
 		return [deltaPhi, deltaGamma](FVector2D coordinates) {
 			double cosDeltaPhi = FMath::Cos(deltaPhi),
@@ -125,20 +125,69 @@ public:
 
 struct FGeoStereographic
 {
-public:
-	FGeoStereographic() {};
+//public:
+	FGeoStereographic() {
+		_project = StereoGraphicRaw();
+	};
 
-	std::function<FVector2D(FVector2D)> project;
-	double k, // scale 150
-		x /*480.*/, y /*250*/, // translate
-		lambda /*0.*/, phi /*0.*/, // center
+	double _k{150.}, // scale 150
+		_x{ 480. } /*480.*/, _y{ 250. } /*250*/, // translate
+		_lambda{ 0. } /*0.*/, _phi{ 0. } /*0.*/, // center
 
 		// pre-rotate
-		deltaLambda /*0.*/, deltaPhi /*0.*/, deltaGamma /*0.*/;
-	std::function<FVector2D(FVector2D)> rotate;
+		_deltaLambda{0.} /*0.*/, _deltaPhi{ 0. } /*0.*/, _deltaGamma{ 0. } /*0.*/;
+	std::function<FVector2D(FVector2D)> _rotate;
 
-	double alpha /*0.*/, // post-rotate angle
-		sx, sy; // reflectX, reflectY, both 1.
+	double _alpha{ 0. } /*0.*/, // post-rotate angle
+		_sx{1.}, _sy{ 1. }; // reflectX, reflectY, both 1.
+
+	std::function<FVector2D(FVector2D)> _project;
+
+	std::function<FVector2D(FVector2D)> _projectTransform;
+	std::function<FVector2D(FVector2D)> _projectRotateTransform;
+
+	std::function<FVector2D(FVector2D)> _projection() {
+		Recenter();
+		return _projectRotateTransform;
+	}
+
+	std::function<FVector2D(FVector2D)> _projection(std::function<FVector2D(FVector2D)> inProject) {
+		_project = inProject;
+		Recenter();
+		return _projectRotateTransform;
+	}
+
+	FGeoStereographic& Translate(FVector2D inTranslate) {
+		_x = inTranslate.X;
+		_y = inTranslate.Y;
+		Recenter();
+		return *this;
+	}
+
+	FGeoStereographic& Scale(double inScale) {
+		_k = inScale;
+		Recenter();
+		return *this;
+	}
+
+	FGeoStereographic& Rotate(FVector2D inDelta) {
+		_deltaLambda = std::fmod(inDelta.X, 360.0) * RADIANS;
+		_deltaPhi = std::fmod(inDelta.Y, 360.0) * RADIANS;
+		Recenter();
+		return *this;
+	}
+
+	FGeoStereographic& Rotate(FVector inDelta) {
+		_deltaLambda = std::fmod(inDelta.X, 360.0) * RADIANS;
+		_deltaPhi = std::fmod(inDelta.Y, 360.0) * RADIANS;
+		_deltaGamma = std::fmod(inDelta.Z, 360.0) * RADIANS;
+		Recenter();
+		return *this;
+	}
+
+	/*FGeoStereographic* ClipAngle() {
+		return this;
+	}*/
 
 	std::function<FVector2D(FVector2D)> StereoGraphicRaw()
 	{
@@ -162,11 +211,27 @@ public:
 		double cosAlpha = FMath::Cos(alpha),
 			sinAlpha = FMath::Sin(alpha),
 			a = cosAlpha * k,
-			b = sinAlpha * k;
+			b = sinAlpha * k,
+			ai = cosAlpha / k,
+			bi = sinAlpha / k,
+			ci = (sinAlpha * dy - cosAlpha * dx) / k,
+			fi = (sinAlpha * dx + cosAlpha * dy) / k;
 		return [=](FVector2D point) {
 			point.X *= sx; point.Y *= sy;
 			return FVector2D(a * point.X - b * point.Y + dx, dy - b * point.X - a * point.Y);
 			};
+	}
+
+	void Recenter() {
+		FVector2D center = scaleTranslateRotate(_k, 0, 0, _sx, _sy, _alpha)(_project(FVector2D(_lambda, _phi)));
+		/*FVector2D projected = _project(FVector2D(_lambda, _phi));
+		auto transformFunc = scaleTranslateRotate(_k, 0, 0, _sx, _sy, _alpha);
+		FVector2D center = transformFunc(projected);*/
+
+		std::function<FVector2D(FVector2D)> transform = scaleTranslateRotate(_k, _x - center[0], _y - center[1], _sx, _sy, _alpha);
+		_rotate = FGeoRotation::RotateRadians(_deltaLambda, _deltaPhi, _deltaGamma);
+		_projectTransform = FCompose::Compose(_project, transform);
+		_projectRotateTransform = FCompose::Compose(_rotate, _projectTransform);
 	}
 };
 
@@ -200,6 +265,7 @@ public:
 protected:
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
@@ -207,6 +273,9 @@ protected:
 
 	UPROPERTY()
 	UDelaunator* Delaunator = nullptr;
+
+	TArray<FVector> FibonacciPoints;
+	std::vector<double> coords;
 
 public:
 
