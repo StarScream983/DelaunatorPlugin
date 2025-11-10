@@ -5,13 +5,14 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Delaunator.h"
+#include "MathShim.h"
 #include <functional>
 #include <array>
 #include "GeoDelaunatorComponent.generated.h"
 
 
 #define _PI UE_DOUBLE_PI
-#define _TWO_PI UE_DOUBLE_TWO_PI
+#define _TAU UE_DOUBLE_TWO_PI
 #define DEGREES (180. / UE_DOUBLE_PI)
 #define RADIANS (UE_DOUBLE_PI / 180.)
 
@@ -58,7 +59,7 @@ struct FGeoRotation
 
 	static std::function<FVector2D(FVector2D)> RotateRadians(double deltaLambda, double deltaPhi, double deltaGamma = 0.)
 	{
-		deltaLambda = FMath::Fmod(deltaLambda, _TWO_PI);
+		deltaLambda = FMath::Fmod(deltaLambda, _TAU);
 		if (deltaLambda != 0.)
 		{
 			if(deltaPhi != 0. || deltaGamma != 0.)
@@ -87,7 +88,7 @@ struct FGeoRotation
 	{
 		return [](FVector2D lambdaPhi) {
 				double lambda = lambdaPhi.X;
-				if (FMath::Abs(lambda) > _PI) lambda -= std::round(lambda / _TWO_PI) * _TWO_PI;
+				if (FMath::Abs(lambda) > _PI) lambda -= std::round(lambda / _TAU) * _TAU;
 				return FVector2D(lambda, lambdaPhi.Y);
 			};
 	}
@@ -97,7 +98,7 @@ struct FGeoRotation
 		return [deltaLambda](FVector2D coordinates) {
 			double lambda = coordinates.X;
 			lambda += deltaLambda;
-			if (FMath::Abs(lambda) > _PI) lambda -= std::round(lambda / _TWO_PI) * _TWO_PI;
+			if (FMath::Abs(lambda) > _PI) lambda -= std::round(lambda / _TAU) * _TAU;
 				return FVector2D(lambda, coordinates.Y);
 			};
 	}
@@ -105,22 +106,52 @@ struct FGeoRotation
 	static std::function<FVector2D(FVector2D)> RotationPhiGamma(double deltaPhi, double deltaGamma = 0.)
 	{
 		return [deltaPhi, deltaGamma](FVector2D coordinates) {
-			double cosDeltaPhi = FMath::Cos(deltaPhi),
-				sinDeltaPhi = FMath::Sin(deltaPhi),
-				cosDeltaGamma = FMath::Cos(deltaGamma),
-				sinDeltaGamma = FMath::Sin(deltaGamma);
+			double cosDeltaPhi = MathShim::SCos(deltaPhi),
+				sinDeltaPhi = MathShim::SSin(deltaPhi),
+				cosDeltaGamma = MathShim::SCos(deltaGamma),
+				sinDeltaGamma = MathShim::SSin(deltaGamma);
 
 			double lambda = coordinates.X, phi = coordinates.Y;
 
-			double cosPhi = FMath::Cos(phi),
-				x = FMath::Cos(lambda) * cosPhi,
-				y = FMath::Sin(lambda) * cosPhi,
-				z = FMath::Sin(phi),
+			double cosPhi = MathShim::SCos(phi),
+				x = MathShim::SCos(lambda) * cosPhi,
+				y = MathShim::SSin(lambda) * cosPhi,
+				z = MathShim::SSin(phi),
 				k = z * cosDeltaGamma - y * sinDeltaGamma;
-			return FVector2D(FMath::Atan2(y * cosDeltaGamma + z * sinDeltaGamma, x * cosDeltaPhi + k * sinDeltaPhi),
-				FMath::Asin(k * cosDeltaPhi - x * sinDeltaPhi));
+			return FVector2D(MathShim::SAtan2(y * cosDeltaGamma + z * sinDeltaGamma, x * cosDeltaPhi + k * sinDeltaPhi),
+				MathShim::SAsin(k * cosDeltaPhi - x * sinDeltaPhi));
 		};
 	}
+};
+
+struct FGeoMatrixRotation
+{
+	FGeoMatrixRotation() {}
+	// pivot in DEGREES (same as before)
+	explicit FGeoMatrixRotation(FVector2D pivotDeg);
+
+	// Keep this so your code compiles, but it’s no longer used by FGeoRotation itself.
+	static std::function<FVector2D(FVector2D)> MatrixRotateRadians(double deltaLambda, double deltaPhi, double deltaGamma = 0.);
+
+	// Keep the helpers you already had (RotationLambda / RotationPhiGamma / RotationIdentity)
+	static std::function<FVector2D(FVector2D)> MatrixRotationIdentity();
+	static std::function<FVector2D(FVector2D)> MatrixRotationLambda(double deltaLambda);
+	static std::function<FVector2D(FVector2D)> MatrixRotationPhiGamma(double deltaPhi, double deltaGamma = 0.);
+
+	// d3-geo-style API you’re calling: returns DEGREES
+	FVector2D Invert(FVector2D coordinatesDeg) const;
+
+	// Kept for compatibility (not used internally anymore)
+	std::function<FVector2D(FVector2D)> Rotate;
+
+private:
+	// 3x3 rotation matrix that maps pivot -> south pole
+	double M[3][3];   // forward  (apply to go pivot->south frame)
+	double MT[3][3];  // inverse  (transpose)
+
+	static void BuildRotationBetweenUnitVectors(const double a[3], const double b[3], double R[3][3]);
+	static void Transpose3(const double A[3][3], double AT[3][3]);
+	static void MulVec3(const double A[3][3], const double v[3], double out[3]);
 };
 
 struct FGeoStereographic
@@ -192,8 +223,8 @@ struct FGeoStereographic
 	std::function<FVector2D(FVector2D)> StereoGraphicRaw()
 	{
 		return [](FVector2D point) {
-			double cy = FMath::Cos(point.Y), k = 1 + FMath::Cos(point.X) * cy;
-			return FVector2D(cy * FMath::Sin(point.X) / k, FMath::Sin(point.Y) / k);
+			double cy = MathShim::SCos(point.Y), k = 1 + MathShim::SCos(point.X) * cy;
+			return FVector2D(cy * MathShim::SSin(point.X) / k, MathShim::SSin(point.Y) / k);
 			};
 	}
 
@@ -208,8 +239,8 @@ struct FGeoStereographic
 	std::function<FVector2D(FVector2D)> scaleTranslateRotate(double k, double dx, double dy, double sx, double sy, double alpha)
 	{
 		if (alpha == 0.) return scaleTranslate(k, dx, dy, sx, sy);
-		double cosAlpha = FMath::Cos(alpha),
-			sinAlpha = FMath::Sin(alpha),
+		double cosAlpha = MathShim::SCos(alpha),
+			sinAlpha = MathShim::SSin(alpha),
 			a = cosAlpha * k,
 			b = sinAlpha * k,
 			ai = cosAlpha / k,
