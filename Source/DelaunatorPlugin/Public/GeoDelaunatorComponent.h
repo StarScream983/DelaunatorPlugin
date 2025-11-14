@@ -1,11 +1,11 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Delaunator.h"
-#include "MathShim.h"
+#include <sleef.h>
 #include <functional>
 #include <array>
 #include "GeoDelaunatorComponent.generated.h"
@@ -16,111 +16,173 @@
 #define DEGREES (180. / UE_DOUBLE_PI)
 #define RADIANS (UE_DOUBLE_PI / 180.)
 
-struct FCompose
-{
-public:
-	static std::function<FVector2D(FVector2D)> Compose(
-		std::function<FVector2D(FVector2D)> a,
-		std::function<FVector2D(FVector2D)> b) {
 
-		return[a, b](FVector2D coordinates) {
-			FVector2D result = b(coordinates);
-			return a(result);
+struct FRotation
+{
+	std::function<FVector2D(FVector2D)> forward; // like rotate(?, ?)
+	std::function<FVector2D(FVector2D)> invert;  // like rotate.invert(?, ?)
+};
+
+// Wrap lambda to [-PI, PI]
+static inline double WrapPi(double lambda)
+{
+	if (FMath::Abs(lambda) > _PI)
+		lambda -= FMath::RoundToDouble(lambda / _TAU) * _TAU;
+	return lambda;
+}
+
+static inline FRotation Compose(const FRotation& a, const FRotation& b)
+{
+	FRotation c;
+
+	// forward: a ? b
+	c.forward = [a, b](FVector2D p) {
+		return b.forward(a.forward(p));
+		};
+
+	// invert: b^{-1} ? a^{-1}   (only if both inverses exist)
+	if (a.invert && b.invert)
+	{
+		c.invert = [a, b](FVector2D p) {
+			/*first undo 'a', then undo 'b'’s input mapping order from JS:
+			x = b.invert(x,y); x && a.invert(x[0], x[1])
+			x && ... is a short - circuit check :
+			if x is truthy(an array like[?, ?]), call a.invert(x[0], x[1]);
+			else skip it and return x(likely null).*/
+			FVector2D q = b.invert(p);
+			return a.invert ? a.invert(q) : q; // safety; mirrors JS guard
 			};
 	}
-};
+	else
+	{
+		// leave c.invert empty if either a/b has no invert
+		c.invert = {};
+	}
+
+	return c;
+}
 
 struct FGeoRotation
 {
-//public:
 
-	FGeoRotation() {};
-	// Pivot in degrees
-	FGeoRotation(FVector2D pivot){
-		Rotate = RotateRadians(pivot.X, pivot.Y);
-	}
+private:
+	FRotation RotateR; // radians-domain rotation (forward + invert)
 
-	std::function<FVector2D(FVector2D)> Rotate;
+public:
+	FGeoRotation() = default;
 
-	// the main function, will not be called
-	FVector2D Forward(FVector2D coordinates)
+	// pivot in DEGREES, just like d3.geoRotation(pivot)
+	explicit FGeoRotation(FVector2D pivotDeg)
 	{
-		// call Rotate with "coordinates"
-		return FVector2D();
+		RotateR = RotateRadians(pivotDeg.X * RADIANS, pivotDeg.Y * RADIANS, 0.0);
 	}
 
-	// the invert of the main function, this one will be called
-	FVector2D Invert(FVector2D coordinates)
+	// forward: degrees in → degrees out
+	FVector2D Forward(FVector2D coordinatesDeg) const
 	{
-		//UE_LOG(LogTemp, Warning, TEXT("GEO INVERT !!"));
-		coordinates = Rotate(coordinates);
-		return coordinates * DEGREES;
+		FVector2D rad = coordinatesDeg * RADIANS;
+		FVector2D out = RotateR.forward ? RotateR.forward(rad) : rad;
+		return out * DEGREES;
 	}
 
-	static std::function<FVector2D(FVector2D)> RotateRadians(double deltaLambda, double deltaPhi, double deltaGamma = 0.)
+	// invert: degrees in → degrees out (this is what we'll actually use)
+	FVector2D Invert(FVector2D coordinatesDeg) const
+	{
+		FVector2D rad = coordinatesDeg * RADIANS;
+		FVector2D out = RotateR.invert ? RotateR.invert(rad) : rad;
+		return out * DEGREES;
+	}
+
+	static FRotation RotationIdentity() {
+		FRotation r;
+		r.forward = [](FVector2D p) { return FVector2D(WrapPi(p.X), p.Y); };
+		r.invert = r.forward;
+		return r;
+	}
+
+	static FRotation RotateRadians(double deltaLambda, double deltaPhi, double deltaGamma = 0.0)
 	{
 		deltaLambda = FMath::Fmod(deltaLambda, _TAU);
-		if (deltaLambda != 0.)
+
+		if (deltaLambda != 0.0)
 		{
-			if(deltaPhi != 0. || deltaGamma != 0.)
-			{
-				return FCompose::Compose(RotationLambda(-deltaLambda), RotationPhiGamma(deltaPhi, deltaGamma));
-			}
+			if (deltaPhi != 0.0 || deltaGamma != 0.0)
+				return Compose(RotationLambda(-deltaLambda), RotationPhiGamma(deltaPhi, deltaGamma));
 			else
-			{
 				return RotationLambda(-deltaLambda);
-			}
 		}
 		else
 		{
-			if (deltaPhi != 0. || deltaGamma != 0.)
-			{
-				return RotationLambda(-deltaLambda);
-			}
+			if (deltaPhi != 0.0 || deltaGamma != 0.0)
+				return RotationPhiGamma(deltaPhi, deltaGamma);
 			else
-			{
 				return RotationIdentity();
-			}
 		}
 	}
 
-	static std::function<FVector2D(FVector2D)> RotationIdentity()
-	{
-		return [](FVector2D lambdaPhi) {
-				double lambda = lambdaPhi.X;
-				if (FMath::Abs(lambda) > _PI) lambda -= std::round(lambda / _TAU) * _TAU;
-				return FVector2D(lambda, lambdaPhi.Y);
-			};
+	static FRotation RotationLambda(double deltaLambda) {
+		FRotation r;
+		// lambda = p.X, phi = p.Y
+		r.forward = [=](FVector2D p) { return FVector2D(WrapPi(p.X + deltaLambda), p.Y); };
+		r.invert = [=](FVector2D p) { return FVector2D(WrapPi(p.X - deltaLambda), p.Y); };
+		return r;
 	}
 
-	static std::function<FVector2D(FVector2D)> RotationLambda(double deltaLambda)
+	static FRotation RotationPhiGamma(double deltaPhi, double deltaGamma = 0.0)
 	{
-		return [deltaLambda](FVector2D coordinates) {
-			double lambda = coordinates.X;
-			lambda += deltaLambda;
-			if (FMath::Abs(lambda) > _PI) lambda -= std::round(lambda / _TAU) * _TAU;
-				return FVector2D(lambda, coordinates.Y);
+		// Precompute once (radians)
+		const double cosDeltaPhi = Sleef_cos_u10(deltaPhi);
+		const double sinDeltaPhi = Sleef_sin_u10(deltaPhi);
+		const double cosDeltaGamma = Sleef_cos_u10(deltaGamma); // replace by 1.0
+		const double sinDeltaGamma = Sleef_sin_u10(deltaGamma); // replace by 0.0
+
+		FRotation rPhiGamma;
+
+		// forward
+		rPhiGamma.forward = [=](FVector2D coordinates)
+			{
+				const double lambda = coordinates.X;
+				const double phi = coordinates.Y;
+
+				const double cosPhi = Sleef_cos_u10(phi);
+				const double x = Sleef_cos_u10(lambda) * cosPhi;
+				const double y = Sleef_sin_u10(lambda) * cosPhi;
+				const double z = Sleef_sin_u10(phi);
+
+				const double k = z * cosDeltaPhi + x * sinDeltaPhi;
+
+				const double lambdaOut = Sleef_atan2_u10(
+					y * cosDeltaGamma - k * sinDeltaGamma,
+					x * cosDeltaPhi - z * sinDeltaPhi
+				);
+				const double phiOut = Sleef_asin_u10(k * cosDeltaGamma + y * sinDeltaGamma); // SClampUnit -1.0, 1.0
+
+				return FVector2D(lambdaOut, phiOut);
 			};
-	}
 
-	static std::function<FVector2D(FVector2D)> RotationPhiGamma(double deltaPhi, double deltaGamma = 0.)
-	{
-		return [deltaPhi, deltaGamma](FVector2D coordinates) {
-			double cosDeltaPhi = MathShim::SCos(deltaPhi),
-				sinDeltaPhi = MathShim::SSin(deltaPhi),
-				cosDeltaGamma = MathShim::SCos(deltaGamma),
-				sinDeltaGamma = MathShim::SSin(deltaGamma);
+		// invert
+		rPhiGamma.invert = [=](FVector2D coordinates)
+			{
+				const double lambda = coordinates.X;
+				const double phi = coordinates.Y;
 
-			double lambda = coordinates.X, phi = coordinates.Y;
+				const double cosPhi = Sleef_cos_u10(phi);
+				const double x = Sleef_cos_u10(lambda) * cosPhi;
+				const double y = Sleef_sin_u10(lambda) * cosPhi;
+				const double z = Sleef_sin_u10(phi);
 
-			double cosPhi = MathShim::SCos(phi),
-				x = MathShim::SCos(lambda) * cosPhi,
-				y = MathShim::SSin(lambda) * cosPhi,
-				z = MathShim::SSin(phi),
-				k = z * cosDeltaGamma - y * sinDeltaGamma;
-			return FVector2D(MathShim::SAtan2(y * cosDeltaGamma + z * sinDeltaGamma, x * cosDeltaPhi + k * sinDeltaPhi),
-				MathShim::SAsin(k * cosDeltaPhi - x * sinDeltaPhi));
-		};
+				const double k = z * cosDeltaGamma - y * sinDeltaGamma;
+
+				const double lambdaOut = Sleef_atan2_u10(
+					y * cosDeltaGamma + z * sinDeltaGamma,
+					x * cosDeltaPhi + k * sinDeltaPhi
+				);
+				const double phiOut = Sleef_asin_u10(k * cosDeltaPhi - x * sinDeltaPhi); // SClampUnit -1.0, 1.0
+
+				return FVector2D(lambdaOut, phiOut);
+			};
+
+		return rPhiGamma;
 	}
 };
 
@@ -130,7 +192,7 @@ struct FGeoMatrixRotation
 	// pivot in DEGREES (same as before)
 	explicit FGeoMatrixRotation(FVector2D pivotDeg);
 
-	// Keep this so your code compiles, but it�s no longer used by FGeoRotation itself.
+	// Keep this so your code compiles, but it’s no longer used by FGeoRotation itself.
 	static std::function<FVector2D(FVector2D)> MatrixRotateRadians(double deltaLambda, double deltaPhi, double deltaGamma = 0.);
 
 	// Keep the helpers you already had (RotationLambda / RotationPhiGamma / RotationIdentity)
@@ -138,7 +200,7 @@ struct FGeoMatrixRotation
 	static std::function<FVector2D(FVector2D)> MatrixRotationLambda(double deltaLambda);
 	static std::function<FVector2D(FVector2D)> MatrixRotationPhiGamma(double deltaPhi, double deltaGamma = 0.);
 
-	// d3-geo-style API you�re calling: returns DEGREES
+	// d3-geo-style API you’re calling: returns DEGREES
 	FVector2D Invert(FVector2D coordinatesDeg) const;
 
 	// Kept for compatibility (not used internally anymore)
@@ -223,8 +285,8 @@ struct FGeoStereographic
 	std::function<FVector2D(FVector2D)> StereoGraphicRaw()
 	{
 		return [](FVector2D point) {
-			double cy = MathShim::SCos(point.Y), k = 1 + MathShim::SCos(point.X) * cy;
-			return FVector2D(cy * MathShim::SSin(point.X) / k, MathShim::SSin(point.Y) / k);
+			double cy = Sleef_cos_u10(point.Y), k = 1 + Sleef_cos_u10(point.X) * cy;
+			return FVector2D(cy * Sleef_sin_u10(point.X) / k, Sleef_sin_u10(point.Y) / k);
 			};
 	}
 
@@ -239,8 +301,8 @@ struct FGeoStereographic
 	std::function<FVector2D(FVector2D)> scaleTranslateRotate(double k, double dx, double dy, double sx, double sy, double alpha)
 	{
 		if (alpha == 0.) return scaleTranslate(k, dx, dy, sx, sy);
-		double cosAlpha = MathShim::SCos(alpha),
-			sinAlpha = MathShim::SSin(alpha),
+		double cosAlpha = Sleef_cos_u10(alpha),
+			sinAlpha = Sleef_sin_u10(alpha),
 			a = cosAlpha * k,
 			b = sinAlpha * k,
 			ai = cosAlpha / k,
@@ -259,10 +321,10 @@ struct FGeoStereographic
 		auto transformFunc = scaleTranslateRotate(_k, 0, 0, _sx, _sy, _alpha);
 		FVector2D center = transformFunc(projected);*/
 
-		std::function<FVector2D(FVector2D)> transform = scaleTranslateRotate(_k, _x - center[0], _y - center[1], _sx, _sy, _alpha);
+		/*std::function<FVector2D(FVector2D)> transform = scaleTranslateRotate(_k, _x - center[0], _y - center[1], _sx, _sy, _alpha);
 		_rotate = FGeoRotation::RotateRadians(_deltaLambda, _deltaPhi, _deltaGamma);
-		_projectTransform = FCompose::Compose(_project, transform);
-		_projectRotateTransform = FCompose::Compose(_rotate, _projectTransform);
+		_projectTransform = Compose(_project, transform);
+		_projectRotateTransform = Compose(_rotate, _projectTransform);*/
 	}
 };
 
@@ -302,14 +364,57 @@ protected:
 
 protected:
 
+	// PSEUDO-RNG
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain")
+	int64 RandomSeed{ 2236 };
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Terrain")
+	FRandomStream RngStream;
+
+	// FIBONACCI SPHERE
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100", UIMin = "100"), Category = "GeoDelaunator")
+	int32 N = 100; // number of Fibonacci points
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1.0", UIMin = "1.0"), Category = "GeoDelaunator")
+	double PlanetRadius = 1.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator")
+	double Jitter = 9157.;
+
+	// DEBUG DRAW POINTS AND TRIANGLE LINES
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "4.0", UIMin = "4.0", ClampMax = "12.0", UIMax="12.0"), Category = "GeoDelaunator")
+	float DebugPointScale = 4.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1.0", UIMin = "1.0", ClampMax = "5.0", UIMax = "5.0"), Category = "GeoDelaunator")
+	float DebugLineThickness = 1.f;
+
 	UPROPERTY()
 	UDelaunator* Delaunator = nullptr;
 
+	TArray<FVector2D> LonLat;
 	TArray<FVector> FibonacciPoints;
-	std::vector<double> coords;
+	std::vector<double> coords; // FOR DELAUNAY
+	TArray<FIntVector> SphericalTriangles;
+
+	TArray<FVector2D> Projected2D; // FibonacciPoints after Stereographic Projection
+	TArray<int32> IndexMap; // map from ProjectedPoints to LonLat, dunno if needed
+
+	//STICHING INTERPOLATION FOR TESTING
+	TArray<FVector> PivotedPoints;
+
+	// INTERPOLATION DEBUG
+	float InterpolationT = 0.f;
+	FQuat PivotToSouthQuat = FQuat::Identity;
+	FTimerHandle THandle_Interpolate;
+	void Timer_FibonacciInterpolation();
 
 public:
+	
+	void GenerateFibonacciSphere1();
+	void GenerateFibonacciSphere2();
+	void GeoRotation(int32 PivotIndex);
+	void StereographicProjection(TArray<FVector>& Points);
 
-	void GeoDelauny(std::vector<FVector2D> inPoints);
-	UDelaunator* GeoDelaunayFrom(std::vector<FVector2D> inPoints);
+	void CheckUnusedVertices();
+
+	void GeoDelauny();
+	void GeoDelaunayFrom();
 };
