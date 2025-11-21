@@ -78,6 +78,8 @@ void UGeoDelaunatorComponent::Timer_FibonacciInterpolation()
 
 void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 {
+	if (N <= 99) N = 100; // force minimum points 100
+
 	FibonacciPoints.Empty();
 	FibonacciPoints.Reserve(N);
 	LonLat.Empty();
@@ -117,7 +119,7 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 		}
 
 		// Convert to degrees (repo structure: LonLat stores degrees)
-		const double latDeg = lat * DEGREES;
+		double latDeg = lat * DEGREES;
 		double lonDeg = lng * DEGREES;
 
 		lonDeg = FMath::Fmod(lonDeg, 360.0);
@@ -125,11 +127,13 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 
 		LonLat.Add(FVector2D(lonDeg, latDeg));
 
-		// Convert to Cartesian (unit sphere), consistent with repo patterns
+		// Convert to Cartesian (unit sphere) with Z as "up" (north pole at +Z)
+		const double sinLat = Sleef_sin_u10(lat);
 		const double cosLat = Sleef_cos_u10(lat);
+
 		const double x = cosLat * Sleef_cos_u10(lng);
-		const double y = Sleef_sin_u10(lat);
-		const double zCart = cosLat * Sleef_sin_u10(lng);
+		const double y = cosLat * Sleef_sin_u10(lng);
+		const double zCart = sinLat;                 // Z is latitude
 
 		FibonacciPoints.Add(FVector(x, y, zCart));
 
@@ -141,31 +145,66 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 
 void UGeoDelaunatorComponent::GenerateFibonacciSphere2()
 {
+	// Second algorithm from CGA FAQ / RedBlob
 	if (N <= 99) N = 100; // force minimum points 100
 
 	FibonacciPoints.Empty();
 	FibonacciPoints.Reserve(N);
 	LonLat.Empty();
 	LonLat.Reserve(N); // pre-allocates memory for N elements up front.
+	const double s = 3.6 / Sleef_sqrt_u05((double)N);
 	const double dlong = _PI * (3.0 - Sleef_sqrt_u05(5.0)); // golden angle
 	const double dz = 2.0 / N;
 	double z = 1.0 - dz * 0.5;
 	double lon = 0.0;
 
-	for (int32 k = 0; k < N; ++k)
+	FRandomStream Rng(123456); // deterministic jitter
+
+	for (int32 k = 0; k < N; ++k, z -= dz)
 	{
 		const double r = Sleef_sqrt_u05(1.0 - z * z);
 		const double lat = Sleef_asin_u10(z);
 
 		// Convert to degrees
-		const double lonDeg = lon * (DEGREES);
-		const double latDeg = lat * (DEGREES);
+		double lonDeg = lon * (DEGREES);
+		double latDeg = lat * (DEGREES);
+
+		if (Jitter > 0.0)
+		{
+			const double randLat = (double)Rng.GetFraction() - (double)Rng.GetFraction(); // [-1,1]
+			const double randLon = (double)Rng.GetFraction() - (double)Rng.GetFraction(); // [-1,1]
+
+			// latDeg += jitter * randLat * (latDeg - asin(max(-1, z - dz*2π*r/s)) * 180/π);
+			const double z2 = FMath::Max(-1.0, z - dz * 2.0 * _PI * r / s);
+			const double latMin = Sleef_asin_u10(z2) * DEGREES;
+
+			latDeg += Jitter * randLat * (latDeg - latMin);
+
+			// lonDeg += jitter * randLon * (s/r * 180/π);
+			const double safeR = (r > 1e-12) ? r : 1e-12;
+			lonDeg += Jitter * randLon * (s / safeR * DEGREES);
+		}
+
+		// wrap longitude to [0,360) like lonDeg % 360.0
+		lonDeg = FMath::Fmod(lonDeg, 360.0);
+		if (lonDeg < 0.0) lonDeg += 360.0;
 
 		LonLat.Add(FVector2D(lonDeg, latDeg));
-		FibonacciPoints.Add(FVector(r * Sleef_cos_u10(lon), r * Sleef_sin_u10(lon), z));
+
+		// Cartesian on unit sphere, Z-up (Unreal)
+		const double latRad = latDeg / 180.0 * _PI;
+		const double lonRad = lonDeg / 180.0 * _PI;
+
+		const double cosLat = Sleef_cos_u10(latRad);
+		const double sinLat = Sleef_sin_u10(latRad);
+
+		const double x = cosLat * Sleef_cos_u10(lonRad);
+		const double y = cosLat * Sleef_sin_u10(lonRad);
+		const double zCart = sinLat;
+
+		FibonacciPoints.Add(FVector(x, y, zCart));
 
 		lon += dlong;
-		z -= dz;
 	}
 }
 
@@ -257,7 +296,7 @@ void UGeoDelaunatorComponent::GeoDelauny()
 
 void UGeoDelaunatorComponent::GeoDelaunayFrom()
 {
-	GenerateFibonacciSphere2();
+	GenerateFibonacciSphere1();
 
 	// find a valid point to send to infinity
 	int32 PivotIndex = 0;
@@ -360,6 +399,8 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 
 		SphericalTriangles.Empty();
 		SphericalTriangles.Reserve(static_cast<int32>(Delaunator->triangles.size() / 3));
+		SphericalTrisFlat.Empty();
+		SphericalTrisFlat.SetNum(SphericalTriangles.Num() * 3);
 
 		for (std::size_t t = 0; t < Delaunator->triangles.size(); t += 3)
 		{
@@ -372,8 +413,16 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 				continue;
 
 			SphericalTriangles.Add(FIntVector(a, b, c));
+
+			SphericalTrisFlat.Add(a);
+			SphericalTrisFlat.Add(b);
+			SphericalTrisFlat.Add(c);
 		}
 	}
+
+	BuildHalfedgeMesh();
+
+	UE_LOG(LogTemp, Warning, TEXT("HE: %d"), HalfEdge_Mesh.Num());
 
 	// CheckUnusedVertices();
 
@@ -385,4 +434,82 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	auto func = TestStruct.getFunction();
 	func();*/
 	//*******************************************************************
+}
+
+void UGeoDelaunatorComponent::BuildHalfedgeMesh()
+{
+	const int32 NumFaces = SphericalTriangles.Num();
+	const int32 NumEdges = NumFaces * 3;
+
+	//HalfEdge_Mesh.Empty();
+	HalfEdge_Mesh.Init(-1, NumEdges); // each triangle has 3 half-edges, each half-edge has a twin
+
+	//for (int32 i = 0; i < SphericalTriangles.Num(); ++i)
+	//{
+	//	const FIntVector& tri = SphericalTriangles[i];
+	//	// Half-edges of triangle i
+	//	const int32 he0 = i * 3 + 0; // from tri.X to tri.Y
+	//	const int32 he1 = i * 3 + 1; // from tri.Y to tri.Z
+	//	const int32 he2 = i * 3 + 2; // from tri.Z to tri.X
+	//	// Search for twin half-edges in other triangles
+	//	for (int32 j = 0; j < SphericalTriangles.Num(); ++j)
+	//	{
+	//		if (i == j) continue; // skip same triangle
+	//		const FIntVector& otherTri = SphericalTriangles[j];
+	//		// Check each edge of other triangle for twin
+	//		if (tri.X == otherTri.Y && tri.Y == otherTri.X)
+	//		{
+	//			const int32 otherHe = j * 3 + 1; // other triangle's edge from Y to X
+	//			HalfEdge_Mesh[he0] = otherHe;
+	//			HalfEdge_Mesh[otherHe] = he0;
+	//		}
+	//		else if (tri.Y == otherTri.Z && tri.Z == otherTri.Y)
+	//		{
+	//			const int32 otherHe = j * 3 + 2; // other triangle's edge from Z to Y
+	//			HalfEdge_Mesh[he1] = otherHe;
+	//			HalfEdge_Mesh[otherHe] = he1;
+	//		}
+	//		else if (tri.Z == otherTri.X && tri.X == otherTri.Z)
+	//		{
+	//			const int32 otherHe = j * 3 + 0; // other triangle's edge from X to Z
+	//			HalfEdge_Mesh[he2] = otherHe;
+	//			HalfEdge_Mesh[otherHe] = he2;
+	//		}
+	//	}
+	//}
+
+	// --- Map from undirected edge -> one oriented edge index ---
+	TMap<FEdgeKey, int32> EdgeMap;
+	EdgeMap.Reserve(NumEdges);
+
+	for (int32 t = 0; t < NumFaces; ++t)
+	{
+		const int32 Base = 3 * t;
+
+		// local edges: (0->1), (1->2), (2->0)
+		for (int32 k = 0; k < 3; ++k)
+		{
+			const int32 e = Base + k;
+			const int32 v0 = SphericalTrisFlat[e];
+			const int32 v1 = SphericalTrisFlat[Base + (k + 1) % 3];
+
+			const FEdgeKey Key(v0, v1);
+
+			if (int32* ExistingEdge = EdgeMap.Find(Key))
+			{
+				// found twin
+				const int32 e2 = *ExistingEdge;
+				HalfEdge_Mesh[e] = e2;
+				HalfEdge_Mesh[e2] = e;
+			}
+			else
+			{
+				EdgeMap.Add(Key, e);
+			}
+		}
+	}
+}
+
+void UGeoDelaunatorComponent::BuildCBT()
+{
 }
