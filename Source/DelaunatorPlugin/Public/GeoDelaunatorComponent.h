@@ -8,6 +8,7 @@
 #include <sleef.h>
 #include <functional>
 #include <array>
+#include "CBTStructs.h"
 #include "GeoDelaunatorComponent.generated.h"
 
 
@@ -279,20 +280,55 @@ protected:
 	TArray<FIntVector> SphericalTriangles;
 	TArray<int32> SphericalTrisFlat;
 
-	//STICHING INTERPOLATION
+	//STICHING
 	TArray<FVector> PivotedPoints;
 
 	TArray<FVector2D> Projected2D; // FibonacciPoints after Stereographic Projection
 	TArray<int32> IndexMap; // map from ProjectedPoints to LonLat, dunno if needed
 
-	// INTERPOLATION DEBUG
+	// INTERPOLATION DRAW DEBUG
 	float InterpolationT = 0.f;
 	FQuat PivotToSouthQuat = FQuat::Identity;
 	FTimerHandle THandle_Interpolate;
 	void Timer_FibonacciInterpolation();
 
+	// HALF EDGE DEBUG
+	int32 TriToDraw{ 0 };
+	int32 VertToDraw{ 0 };
+	FTimerHandle THandle_HalfEdgeDebug;
+	FORCEINLINE int32 IncrementVertID()
+	{
+		if (VertToDraw >= 0 && VertToDraw <= 2) VertToDraw++;
+		if (VertToDraw > 2) VertToDraw = 0;
+		return VertToDraw;
+	};
+
+	FORCEINLINE void Timer_HalfEdgeDebug()
+	{
+		int32 VertID = 0;
+		int32 EndID = 0;
+		if (VertToDraw == 0) { VertID = SphericalTriangles[TriToDraw].X; EndID = SphericalTriangles[TriToDraw].Y; }
+		if (VertToDraw == 1) { VertID = SphericalTriangles[TriToDraw].Y; EndID = SphericalTriangles[TriToDraw].Z; }
+		if (VertToDraw == 2) { VertID = SphericalTriangles[TriToDraw].Z; EndID = SphericalTriangles[TriToDraw].X; }
+		FVector Vert = FibonacciPoints[VertID];
+		FVector End = FibonacciPoints[EndID];
+		DrawDebugPoint(GetWorld(), GetOwner()->GetActorLocation() + Vert*PlanetRadius, 12.f, FColor::Green);
+		DrawDebugLine(GetWorld(), GetOwner()->GetActorLocation() + Vert * PlanetRadius, GetOwner()->GetActorLocation() + End * PlanetRadius, FColor::Blue, false, 1.f/2.f, 0, 12.f);
+		IncrementVertID();
+		if (VertToDraw == 2) TriToDraw++;
+		if (TriToDraw >= SphericalTriangles.Num()) TriToDraw = 0;
+	};
+
+	// VORONOI
+	TArray<FVector> VorVert3D;
+	TArray<bool> TriValid;
+	TArray<FVector2d> VorVert2D; // circumcenters indexed by tri
+	int32 Pivot{ -1 };
+
 	// CBT STRUCTURE
+	uint32 D{ 16 }; // CBT Depth
 	TArray<int32> HalfEdge_Mesh;
+	TArray<FHalfEdge_CBT> HalfEdge_Buffer;
 
 public:
 	
@@ -300,14 +336,25 @@ public:
 	void GenerateFibonacciSphere2();
 	void GeoRotation(int32 PivotIndex);
 	void StereographicProjection(TArray<FVector>& Points);
+	FVector UnprojectVoronoiVertexToSphereAndInvertRotation(const FVector2d& V2D);
 
 	// FOR DEBUGGING UNUSED VERTICES
 	void CheckUnusedVertices();
 
+	 //GEO-DELAUNAY
 	void GeoDelauny();
 	void GeoDelaunayFrom();
 
-	// BUILD CBT STRUCTURE
+	// VORONOI
+	// points are in your projection plane (same coords given to Delaunator)
+	static bool ComputeCircumcenter2D(
+		const FVector2d& A,
+		const FVector2d& B,
+		const FVector2d& C,
+		FVector2d& OutCenter);
+
+
+	// CBT STRUCTURE
 	void BuildHalfedgeMesh();
 	void BuildCBT();
 };

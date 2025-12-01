@@ -2,9 +2,9 @@
 
 using UnrealBuildTool;
 
-public class DelaunatorPlugin : ModuleRules
+public class Large_CBT : ModuleRules
 {
-	public DelaunatorPlugin(ReadOnlyTargetRules Target) : base(Target)
+	public Large_CBT(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		
@@ -27,9 +27,11 @@ public class DelaunatorPlugin : ModuleRules
 			{
 				"Core",
 				// ... add other public dependencies that you statically link with here ...
-				"Large_CBT",
-				"SleefPlugin",
-                "SLEEF"
+				//"SleefPlugin",
+                //"SLEEF"
+				"RenderCore",   // FGlobalShader, ShaderParameterStruct // FGlobalShader, RDG utils
+				"Renderer",      // RendererInterface.h, SceneView.h // GetRendererModule(), post-opaque delegate
+                "RHI",
 			}
 			);
 			
@@ -42,6 +44,7 @@ public class DelaunatorPlugin : ModuleRules
 				"Slate",
 				"SlateCore",
 				// ... add private dependencies that you statically link with here ...	
+				"Projects",      // for IPluginManager (shader dir mapping)        // FRHI*
 			}
 			);
 		

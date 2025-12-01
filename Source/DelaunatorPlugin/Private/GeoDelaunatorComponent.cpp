@@ -36,6 +36,8 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	// ...
 	FVector Location = GetOwner()->GetActorLocation();
+	UWorld* WorldActual = GetWorld();
+	if (!WorldActual) return;
 	
 	for(int32 i = 0; i < N; i++)
 	{
@@ -51,9 +53,74 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		const FVector B = FibonacciPoints[tri.Y] * PlanetRadius + Location;
 		const FVector C = FibonacciPoints[tri.Z] * PlanetRadius + Location;
 
-		DrawDebugLine(GetWorld(), A, B, FColor::Yellow, false, 0.f, 0, DebugLineThickness);
-		DrawDebugLine(GetWorld(), B, C, FColor::Yellow, false, 0.f, 0, DebugLineThickness);
-		DrawDebugLine(GetWorld(), C, A, FColor::Yellow, false, 0.f, 0, DebugLineThickness);
+		DrawDebugLine(GetWorld(), A, B, FColor::Black, false, 0.f, 0, DebugLineThickness);
+		DrawDebugLine(GetWorld(), B, C, FColor::Black, false, 0.f, 0, DebugLineThickness);
+		DrawDebugLine(GetWorld(), C, A, FColor::Black, false, 0.f, 0, DebugLineThickness);
+	}
+
+	// 2D VORONOI
+	//auto To3D = [](const FVector2d& P2D)
+	//	{
+	//		// Draw in XY plane at Z = 0
+	//		return FVector((float)P2D.X, (float)P2D.Y, 0.0f);
+	//	};
+
+	//const int32 NumH = HalfEdge_Buffer.Num();
+
+	//if(NumH>0)
+	//{
+	//	for (int32 h = 0; h < HalfEdge_Buffer.Num(); ++h)
+	//	{
+	//		int32 Twin = HalfEdge_Buffer[h].Twin;
+	//		if (Twin < 0 || h > Twin) continue;
+
+	//		int32 siteL = HalfEdge_Buffer[h].Face;
+	//		int32 siteR = HalfEdge_Buffer[Twin].Face;
+
+	//		FColor Color = FColor::White;
+	//		if (siteL == Pivot || siteR == Pivot)
+	//		{
+	//			Color = FColor::Red; // rays touching pivot's cell
+	//		}
+
+	//		const int32 v0 = HalfEdge_Buffer[h].Vert;
+	//		const int32 v1 = HalfEdge_Buffer[Twin].Vert;
+
+	//		FVector2d P0_2D = VorVert2D[v0];
+	//		FVector2d P1_2D = VorVert2D[v1];
+
+	//		double MaxR2 = 10000.0; // adjust
+
+	//		if (P0_2D.SquaredLength() > MaxR2 ||
+	//			P1_2D.SquaredLength() > MaxR2)
+	//		{
+	//			continue;
+	//		}
+
+	//		DrawDebugLine(WorldActual,
+	//			FVector(P0_2D.X, P0_2D.Y, 0.0)*100. + Location,
+	//			FVector(P1_2D.X, P1_2D.Y, 0.0)*100. + Location,
+	//			Color, false, 0.f, 0, DebugLineThickness);
+	//	}
+	//}
+
+	// SPHERE VORONOI
+	const int32 NumH = HalfEdge_Buffer.Num();
+
+	for (int32 h = 0; h < NumH; ++h)
+	{
+		int32 Twin = HalfEdge_Buffer[h].Twin;
+		if (Twin < 0 || h > Twin) continue; // draw each undirected edge once
+
+		int32 v0 = HalfEdge_Buffer[h].Vert;
+		int32 v1 = HalfEdge_Buffer[Twin].Vert;
+
+		const FVector& P0 = VorVert3D[v0];
+		const FVector& P1 = VorVert3D[v1];
+
+		DrawDebugPoint(GetWorld(), P0 * PlanetRadius + Location, DebugPointScale, FColor::Blue);
+		DrawDebugLine(WorldActual, P0 * PlanetRadius + Location, P1 * PlanetRadius + Location, FColor::White,
+			false, 0.0f, 0, DebugLineThickness);
 	}
 }
 
@@ -264,6 +331,28 @@ void UGeoDelaunatorComponent::StereographicProjection(TArray<FVector>& Points)
 	}
 }
 
+FVector UGeoDelaunatorComponent::UnprojectVoronoiVertexToSphereAndInvertRotation(const FVector2d& V2D)
+{
+		const double u = V2D.X;
+		const double v = V2D.Y;
+
+		const double r2 = u * u + v * v;
+		const double den = 1.0 + r2;
+
+		const double Xr = 2.0 * u / den;
+		const double Yr = 2.0 * v / den;
+		const double Zr = (1.0 - r2) / den;
+
+		FVector Rotated((float)Xr, (float)Yr, (float)Zr);
+
+		const FQuat InvQuat = PivotToSouthQuat.Inverse();
+		FVector Original = InvQuat.RotateVector(Rotated);
+		Original.Normalize();
+
+		return Original;
+		//return FVector(Xr, Yr, Zr); // return unrotated points
+}
+
 void UGeoDelaunatorComponent::CheckUnusedVertices()
 {
 	const int32 F = FibonacciPoints.Num();
@@ -305,6 +394,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	{
 		++PivotIndex;
 	}
+	Pivot = PivotIndex;
 
 	GeoRotation(PivotIndex);
 
@@ -420,10 +510,141 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 		}
 	}
 
-	BuildHalfedgeMesh();
+	// VORONOI
+	int32 NumTris = (int32)Delaunator->triangles.size() / 3;
+	TriValid.Empty();
+	TriValid.SetNum(NumTris);
+	VorVert2D.Empty();
+	VorVert2D.SetNum(NumTris);
+
+	for (int32 tri = 0; tri < NumTris; ++tri)
+	{
+		int32 ia = (int32)Delaunator->triangles[3 * tri + 0];
+		int32 ib = (int32)Delaunator->triangles[3 * tri + 1];
+		int32 ic = (int32)Delaunator->triangles[3 * tri + 2];
+
+		// skip collapsed hull tris (all pivot, or any duplicate)
+		if (ia == ib || ib == ic || ic == ia)
+		{
+			TriValid[tri] = false;
+			continue;
+		}
+
+		TriValid[tri] = true;
+
+		FVector2d A = Projected2D[ia];
+		FVector2d B = Projected2D[ib];
+		FVector2d C = Projected2D[ic];
+
+		FVector2d CC;
+		ComputeCircumcenter2D(A, B, C, CC);
+		VorVert2D[tri] = CC;
+	}
+
+	HalfEdge_Buffer.Empty();
+
+	auto NextCorner = [](int32 h)
+		{
+			return (h % 3 == 2) ? h - 2 : h + 1;
+		};
+
+	int32 NumCorners = (int32)Delaunator->halfedges.size(); 
+	
+	for (int32 h = 0; h < NumCorners; ++h)
+	{
+		int32 hTwin = (int32)Delaunator->halfedges[h];
+		if (hTwin == (int32)Delaunator->INVALID_INDEX)
+			continue;                       // dead hull edge, ignore
+
+		if (h > hTwin)
+			continue;                       // process each undirected edge once
+
+		int32 triL = h / 3;
+		int32 triR = hTwin / 3;
+		if (!TriValid[triL] || !TriValid[triR])
+			continue;
+
+		// Delaunay edge between sites i0 and i1
+		int32 i0 = (int32)Delaunator->triangles[h];
+		int32 i1 = (int32)Delaunator->triangles[NextCorner(h)];
+
+		// create two Voronoi halfedges for this dual edge
+		int32 hv0 = HalfEdge_Buffer.AddDefaulted();
+		int32 hv1 = HalfEdge_Buffer.AddDefaulted();
+
+		// halfedge belonging to cell of site i0
+		HalfEdge_Buffer[hv0].Vert = triR;   // ends at circumcenter of opposite triangle
+		HalfEdge_Buffer[hv0].Face = i0;
+
+		// halfedge belonging to cell of site i1
+		HalfEdge_Buffer[hv1].Vert = triL;
+		HalfEdge_Buffer[hv1].Face = i1;
+
+		// twins
+		HalfEdge_Buffer[hv0].Twin = hv1;
+		HalfEdge_Buffer[hv1].Twin = hv0;
+	}
+
+	int32 NumSites = OriginalCount; // number of geo points
+	TArray<TArray<int32>> FaceHalfedges;
+	FaceHalfedges.SetNum(NumSites);
+
+	for (int32 h = 0; h < HalfEdge_Buffer.Num(); ++h)
+	{
+		int32 f = HalfEdge_Buffer[h].Face;
+		FaceHalfedges[f].Add(h);
+	}
+	
+	for (int32 f = 0; f < NumSites; ++f)
+	{
+		auto& List = FaceHalfedges[f];
+		if (List.Num() < 2) continue;
+
+		const FVector2d Pi = Projected2D[f];
+
+		struct FAngleH { double Angle; int32 H; };
+		TArray<FAngleH> Sorted;
+		Sorted.Reserve(List.Num());
+
+		for (int32 h : List)
+		{
+			int32 vIdx = HalfEdge_Buffer[h].Vert;          // triangle index
+			const FVector2d C = VorVert2D[vIdx]; // circumcenter
+			FVector2d V = C - Pi;
+			double ang = Sleef_atan2_u10(V.Y, V.X);
+			Sorted.Add({ ang, h });
+		}
+
+		Sorted.Sort([](const FAngleH& A, const FAngleH& B)
+			{
+				return A.Angle < B.Angle;
+			});
+
+		int32 m = Sorted.Num();
+		for (int32 k = 0; k < m; ++k)
+		{
+			int32 hCur = Sorted[k].H;
+			int32 hNext = Sorted[(k + 1) % m].H;
+			int32 hPrev = Sorted[(k - 1 + m) % m].H;
+
+			HalfEdge_Buffer[hCur].Next = hNext;
+			HalfEdge_Buffer[hCur].Prev = hPrev;
+		}
+	}
+
+	VorVert3D.SetNum(VorVert2D.Num());
+	for (int32 tri = 0; tri < VorVert2D.Num(); ++tri)
+	{
+		FVector VorVert = UnprojectVoronoiVertexToSphereAndInvertRotation(VorVert2D[tri]); // or _Plus
+		VorVert3D[tri] = VorVert;
+	}
+
+	//BuildHalfedgeMesh();
 
 	UE_LOG(LogTemp, Warning, TEXT("HE: %d"), HalfEdge_Mesh.Num());
 
+	// DEBUG
+	// GetWorld()->GetTimerManager().SetTimer(THandle_HalfEdgeDebug, this, &UGeoDelaunatorComponent::Timer_HalfEdgeDebug, 1.f/2.f, true, 3.f);
 	// CheckUnusedVertices();
 
 	//*******************************************************************
@@ -436,6 +657,34 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	//*******************************************************************
 }
 
+bool UGeoDelaunatorComponent::ComputeCircumcenter2D(const FVector2d& A, const FVector2d& B, const FVector2d& C, FVector2d& OutCenter)
+{
+	const double ax = A.X, ay = A.Y;
+	const double bx = B.X, by = B.Y;
+	const double cx = C.X, cy = C.Y;
+
+	const double d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+	if (FMath::IsNearlyZero(d))
+	{
+		// Degenerate / collinear; fallback: use centroid
+		OutCenter = FVector2d(
+			(ax + bx + cx) / 3.0,
+			(ay + by + cy) / 3.0);
+		return false;
+	}
+
+	const double a2 = ax * ax + ay * ay;
+	const double b2 = bx * bx + by * by;
+	const double c2 = cx * cx + cy * cy;
+
+	const double ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
+	const double uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+
+	OutCenter = FVector2d(ux, uy);
+	return true;
+}
+
+// DEPRECATED
 void UGeoDelaunatorComponent::BuildHalfedgeMesh()
 {
 	const int32 NumFaces = SphericalTriangles.Num();
@@ -479,34 +728,39 @@ void UGeoDelaunatorComponent::BuildHalfedgeMesh()
 	//}
 
 	// --- Map from undirected edge -> one oriented edge index ---
-	TMap<FEdgeKey, int32> EdgeMap;
-	EdgeMap.Reserve(NumEdges);
+	//TMap<FEdgeKey, int32> EdgeMap;
+	//EdgeMap.Reserve(NumEdges);
 
-	for (int32 t = 0; t < NumFaces; ++t)
+	//for (int32 t = 0; t < NumFaces; ++t)
+	//{
+	//	const int32 Base = 3 * t;
+
+	//	// local edges: (0->1), (1->2), (2->0)
+	//	for (int32 k = 0; k < 3; ++k)
+	//	{
+	//		const int32 e = Base + k;
+	//		const int32 v0 = SphericalTrisFlat[e];
+	//		const int32 v1 = SphericalTrisFlat[Base + (k + 1) % 3];
+
+	//		const FEdgeKey Key(v0, v1);
+
+	//		if (int32* ExistingEdge = EdgeMap.Find(Key))
+	//		{
+	//			// found twin
+	//			const int32 e2 = *ExistingEdge;
+	//			HalfEdge_Mesh[e] = e2;
+	//			HalfEdge_Mesh[e2] = e;
+	//		}
+	//		else
+	//		{
+	//			EdgeMap.Add(Key, e);
+	//		}
+	//	}
+	//}
+
+	for (int32 i = 0; i < SphericalTrisFlat.Num(); i++)
 	{
-		const int32 Base = 3 * t;
 
-		// local edges: (0->1), (1->2), (2->0)
-		for (int32 k = 0; k < 3; ++k)
-		{
-			const int32 e = Base + k;
-			const int32 v0 = SphericalTrisFlat[e];
-			const int32 v1 = SphericalTrisFlat[Base + (k + 1) % 3];
-
-			const FEdgeKey Key(v0, v1);
-
-			if (int32* ExistingEdge = EdgeMap.Find(Key))
-			{
-				// found twin
-				const int32 e2 = *ExistingEdge;
-				HalfEdge_Mesh[e] = e2;
-				HalfEdge_Mesh[e2] = e;
-			}
-			else
-			{
-				EdgeMap.Add(Key, e);
-			}
-		}
 	}
 }
 
