@@ -105,22 +105,24 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	//}
 
 	// SPHERE VORONOI
-	const int32 NumH = HalfEdge_Buffer.Num();
-
-	for (int32 h = 0; h < NumH; ++h)
+	for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
 	{
-		int32 Twin = HalfEdge_Buffer[h].Twin;
-		if (Twin < 0 || h > Twin) continue; // draw each undirected edge once
+		const TArray<int32>& TriIndices = VoronoiGeoMesh[Site];
+		if (TriIndices.Num() == 0) continue;
 
-		int32 v0 = HalfEdge_Buffer[h].Vert;
-		int32 v1 = HalfEdge_Buffer[Twin].Vert;
+		for (int32 i = 0; i < TriIndices.Num(); ++i)
+		{
+			int32 i0 = TriIndices[i];
+			int32 i1 = TriIndices[(i + 1) % TriIndices.Num()];
 
-		const FVector& P0 = VorVert3D[v0];
-		const FVector& P1 = VorVert3D[v1];
+			if (!VoronoiGeoCenters.IsValidIndex(i0) || !VoronoiGeoCenters.IsValidIndex(i1)) continue;
 
-		DrawDebugPoint(GetWorld(), P0 * PlanetRadius + Location, DebugPointScale, FColor::Blue);
-		DrawDebugLine(WorldActual, P0 * PlanetRadius + Location, P1 * PlanetRadius + Location, FColor::White,
-			false, 0.0f, 0, DebugLineThickness);
+			const FVector A = VoronoiGeoCenters[i0] * PlanetRadius + Location;
+			const FVector B = VoronoiGeoCenters[i1] * PlanetRadius + Location;
+
+			DrawDebugLine(GetWorld(), A, B, FColor::White, false, 0, 0, DebugLineThickness);
+			DrawDebugPoint(GetWorld(), A, DebugPointScale, FColor::Blue);
+		}
 	}
 }
 
@@ -394,7 +396,6 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	{
 		++PivotIndex;
 	}
-	Pivot = PivotIndex;
 
 	GeoRotation(PivotIndex);
 
@@ -466,11 +467,10 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 				Delaunator->halfedges[b] = a;
 			}
 
-			Delaunator->halfedges[j] = INVALID;
-			Delaunator->halfedges[k] = INVALID;
+			Delaunator->halfedges[j] = Delaunator->halfedges[k] = INVALID;
 
 			// Collapse this triangle to the pivot index (in *3D index space*)
-			Delaunator->triangles[i] = Delaunator->triangles[j] = Delaunator->triangles[k] = static_cast<std::size_t>(PivotIndex);
+			Delaunator->triangles[i] = Delaunator->triangles[j] = Delaunator->triangles[k] = PivotIndex;
 
 			// Fil also updates inedges[a], inedges[b] here; we skip because
 			// delaunator.h doesn't expose inedges, and we don't need it for triangles.
@@ -478,11 +478,11 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 			// Skip to end of this triangle
 			i += 2 - (i % 3);
 		}
-		else if (Delaunator->triangles[i] >= static_cast<std::size_t>(OriginalCount))
+		else if (Delaunator->triangles[i] >= OriginalCount)
 		{
 			// Any reference to the 3 synthetic FAR vertices (N, N+1, N+2)
 			// is replaced with the pivot.
-			Delaunator->triangles[i] = static_cast<std::size_t>(PivotIndex);
+			Delaunator->triangles[i] = PivotIndex;
 		}
 
 		// --- 5) Export final triangles in original 3D index space ---
@@ -499,149 +499,78 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 			const int32 c = static_cast<int32>(Delaunator->triangles[t + 2]);
 
 			// Skip degenerate triangles (any repeated vertex)
-			if (a == b || b == c || c == a)
-				continue;
+			// if (a == b || b == c || c == a)	continue;
 
-			SphericalTriangles.Add(FIntVector(a, b, c));
-
-			SphericalTrisFlat.Add(a);
-			SphericalTrisFlat.Add(b);
-			SphericalTrisFlat.Add(c);
-		}
-	}
-
-	// VORONOI
-	int32 NumTris = (int32)Delaunator->triangles.size() / 3;
-	TriValid.Empty();
-	TriValid.SetNum(NumTris);
-	VorVert2D.Empty();
-	VorVert2D.SetNum(NumTris);
-
-	for (int32 tri = 0; tri < NumTris; ++tri)
-	{
-		int32 ia = (int32)Delaunator->triangles[3 * tri + 0];
-		int32 ib = (int32)Delaunator->triangles[3 * tri + 1];
-		int32 ic = (int32)Delaunator->triangles[3 * tri + 2];
-
-		// skip collapsed hull tris (all pivot, or any duplicate)
-		if (ia == ib || ib == ic || ic == ia)
-		{
-			TriValid[tri] = false;
-			continue;
-		}
-
-		TriValid[tri] = true;
-
-		FVector2d A = Projected2D[ia];
-		FVector2d B = Projected2D[ib];
-		FVector2d C = Projected2D[ic];
-
-		FVector2d CC;
-		ComputeCircumcenter2D(A, B, C, CC);
-		VorVert2D[tri] = CC;
-	}
-
-	HalfEdge_Buffer.Empty();
-
-	auto NextCorner = [](int32 h)
-		{
-			return (h % 3 == 2) ? h - 2 : h + 1;
-		};
-
-	int32 NumCorners = (int32)Delaunator->halfedges.size(); 
-	
-	for (int32 h = 0; h < NumCorners; ++h)
-	{
-		int32 hTwin = (int32)Delaunator->halfedges[h];
-		if (hTwin == (int32)Delaunator->INVALID_INDEX)
-			continue;                       // dead hull edge, ignore
-
-		if (h > hTwin)
-			continue;                       // process each undirected edge once
-
-		int32 triL = h / 3;
-		int32 triR = hTwin / 3;
-		if (!TriValid[triL] || !TriValid[triR])
-			continue;
-
-		// Delaunay edge between sites i0 and i1
-		int32 i0 = (int32)Delaunator->triangles[h];
-		int32 i1 = (int32)Delaunator->triangles[NextCorner(h)];
-
-		// create two Voronoi halfedges for this dual edge
-		int32 hv0 = HalfEdge_Buffer.AddDefaulted();
-		int32 hv1 = HalfEdge_Buffer.AddDefaulted();
-
-		// halfedge belonging to cell of site i0
-		HalfEdge_Buffer[hv0].Vert = triR;   // ends at circumcenter of opposite triangle
-		HalfEdge_Buffer[hv0].Face = i0;
-
-		// halfedge belonging to cell of site i1
-		HalfEdge_Buffer[hv1].Vert = triL;
-		HalfEdge_Buffer[hv1].Face = i1;
-
-		// twins
-		HalfEdge_Buffer[hv0].Twin = hv1;
-		HalfEdge_Buffer[hv1].Twin = hv0;
-	}
-
-	int32 NumSites = OriginalCount; // number of geo points
-	TArray<TArray<int32>> FaceHalfedges;
-	FaceHalfedges.SetNum(NumSites);
-
-	for (int32 h = 0; h < HalfEdge_Buffer.Num(); ++h)
-	{
-		int32 f = HalfEdge_Buffer[h].Face;
-		FaceHalfedges[f].Add(h);
-	}
-	
-	for (int32 f = 0; f < NumSites; ++f)
-	{
-		auto& List = FaceHalfedges[f];
-		if (List.Num() < 2) continue;
-
-		const FVector2d Pi = Projected2D[f];
-
-		struct FAngleH { double Angle; int32 H; };
-		TArray<FAngleH> Sorted;
-		Sorted.Reserve(List.Num());
-
-		for (int32 h : List)
-		{
-			int32 vIdx = HalfEdge_Buffer[h].Vert;          // triangle index
-			const FVector2d C = VorVert2D[vIdx]; // circumcenter
-			FVector2d V = C - Pi;
-			double ang = Sleef_atan2_u10(V.Y, V.X);
-			Sorted.Add({ ang, h });
-		}
-
-		Sorted.Sort([](const FAngleH& A, const FAngleH& B)
+			if (a != b && b != c)
 			{
-				return A.Angle < B.Angle;
-			});
+				SphericalTriangles.Add(FIntVector(a, b, c));
 
-		int32 m = Sorted.Num();
-		for (int32 k = 0; k < m; ++k)
-		{
-			int32 hCur = Sorted[k].H;
-			int32 hNext = Sorted[(k + 1) % m].H;
-			int32 hPrev = Sorted[(k - 1 + m) % m].H;
-
-			HalfEdge_Buffer[hCur].Next = hNext;
-			HalfEdge_Buffer[hCur].Prev = hPrev;
+				SphericalTrisFlat.Add(a);
+				SphericalTrisFlat.Add(b);
+				SphericalTrisFlat.Add(c);
+			}
 		}
 	}
 
-	VorVert3D.SetNum(VorVert2D.Num());
-	for (int32 tri = 0; tri < VorVert2D.Num(); ++tri)
+	// --- VORONOI on SPHERE from CIRCUMCENTERS of SPHERICAL TRIANGLES ---
+	TArray<FVector3d> Circumcenters; // transiant to build VoronoiGeoCenters
+	Circumcenters.Empty();
+	Circumcenters.Reserve(SphericalTriangles.Num());
+	Geo_Circumcenters(Circumcenters);
+
+	FGeoPolygonResult tempResult = Geo_Polygons(Circumcenters);
+	VoronoiGeoMesh = tempResult.Polygons;
+	VoronoiGeoCenters = tempResult.Centers;
+
+
+	// --- BUILD HALF-EDGE BUFFER FOR CBT ---
+	TMap<TPair<int32, int32>, int32> TwinMap; // maps directed edge (from, to) → halfedge index
+	TwinMap.Empty();
+
+	for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
 	{
-		FVector VorVert = UnprojectVoronoiVertexToSphereAndInvertRotation(VorVert2D[tri]); // or _Plus
-		VorVert3D[tri] = VorVert;
+		const TArray<int32>& Ring = VoronoiGeoMesh[Site];
+		int32 NumVerts = Ring.Num();
+		if (NumVerts < 3) continue;
+
+		int32 FirstH = HalfEdge_Buffer.Num(); // index of first halfedge for this ring
+
+		for (int32 k = 0; k < NumVerts; ++k)
+		{
+			int32 V0 = Ring[k];
+			int32 V1 = Ring[(k + 1) % NumVerts];
+
+			int32 h = HalfEdge_Buffer.Emplace(); // reserve new entry
+			FHalfEdge_CBT& HE = HalfEdge_Buffer[h];
+
+			HE.Vert = V0;    // start vertex of the halfedge
+			HE.Face = Site;  // owning Voronoi site
+			HE.Next = FirstH + ((k + 1) % NumVerts);
+			HE.Prev = FirstH + ((k - 1 + NumVerts) % NumVerts);
+			HE.Twin = -1;
+
+			// Set undirected edge key (for optional bisector or hashing later)
+			TPair<int32, int32> Edge;
+			HE.Edge = V0;
+
+			// Handle twins
+			TPair<int32, int32> ForwardEdge(V0, V1);
+			TPair<int32, int32> ReverseEdge(V1, V0);
+
+			if (int32* TwinH = TwinMap.Find(ReverseEdge))
+			{
+				HE.Twin = *TwinH;
+				HalfEdge_Buffer[*TwinH].Twin = h;
+			}
+			else
+			{
+				TwinMap.Emplace(ForwardEdge, h);
+			}
+		}
 	}
 
-	//BuildHalfedgeMesh();
 
-	UE_LOG(LogTemp, Warning, TEXT("HE: %d"), HalfEdge_Mesh.Num());
+	//UE_LOG(LogTemp, Warning, TEXT("HE: %d"), HalfEdge_Mesh.Num());
 
 	// DEBUG
 	// GetWorld()->GetTimerManager().SetTimer(THandle_HalfEdgeDebug, this, &UGeoDelaunatorComponent::Timer_HalfEdgeDebug, 1.f/2.f, true, 3.f);
@@ -657,113 +586,121 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	//*******************************************************************
 }
 
-bool UGeoDelaunatorComponent::ComputeCircumcenter2D(const FVector2d& A, const FVector2d& B, const FVector2d& C, FVector2d& OutCenter)
+void UGeoDelaunatorComponent::Geo_Circumcenters(TArray<FVector>& Circumcenters)
 {
-	const double ax = A.X, ay = A.Y;
-	const double bx = B.X, by = B.Y;
-	const double cx = C.X, cy = C.Y;
+	// Assumes: SphericalTriangles is filled with FIntVector(a, b, c) from Delaunator
+	//          and you have FibonacciPoints[N] as FVector on unit sphere
 
-	const double d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-	if (FMath::IsNearlyZero(d))
+	for (const FIntVector& Tri : SphericalTriangles)
 	{
-		// Degenerate / collinear; fallback: use centroid
-		OutCenter = FVector2d(
-			(ax + bx + cx) / 3.0,
-			(ay + by + cy) / 3.0);
-		return false;
-	}
+		const FVector& A = FibonacciPoints[Tri.X];
+		const FVector& B = FibonacciPoints[Tri.Y];
+		const FVector& C = FibonacciPoints[Tri.Z];
 
-	const double a2 = ax * ax + ay * ay;
-	const double b2 = bx * bx + by * by;
-	const double c2 = cx * cx + cy * cy;
+		// Fil's vector sum of cross products
+		const FVector V = FVector::CrossProduct(B, A)
+			+ FVector::CrossProduct(C, B)
+			+ FVector::CrossProduct(A, C);
 
-	const double ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
-	const double uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+		FVector Normalized = V.GetSafeNormal(); // This is the circumcenter on the unit sphere
 
-	OutCenter = FVector2d(ux, uy);
-	return true;
-}
-
-// DEPRECATED
-void UGeoDelaunatorComponent::BuildHalfedgeMesh()
-{
-	const int32 NumFaces = SphericalTriangles.Num();
-	const int32 NumEdges = NumFaces * 3;
-
-	//HalfEdge_Mesh.Empty();
-	HalfEdge_Mesh.Init(-1, NumEdges); // each triangle has 3 half-edges, each half-edge has a twin
-
-	//for (int32 i = 0; i < SphericalTriangles.Num(); ++i)
-	//{
-	//	const FIntVector& tri = SphericalTriangles[i];
-	//	// Half-edges of triangle i
-	//	const int32 he0 = i * 3 + 0; // from tri.X to tri.Y
-	//	const int32 he1 = i * 3 + 1; // from tri.Y to tri.Z
-	//	const int32 he2 = i * 3 + 2; // from tri.Z to tri.X
-	//	// Search for twin half-edges in other triangles
-	//	for (int32 j = 0; j < SphericalTriangles.Num(); ++j)
-	//	{
-	//		if (i == j) continue; // skip same triangle
-	//		const FIntVector& otherTri = SphericalTriangles[j];
-	//		// Check each edge of other triangle for twin
-	//		if (tri.X == otherTri.Y && tri.Y == otherTri.X)
-	//		{
-	//			const int32 otherHe = j * 3 + 1; // other triangle's edge from Y to X
-	//			HalfEdge_Mesh[he0] = otherHe;
-	//			HalfEdge_Mesh[otherHe] = he0;
-	//		}
-	//		else if (tri.Y == otherTri.Z && tri.Z == otherTri.Y)
-	//		{
-	//			const int32 otherHe = j * 3 + 2; // other triangle's edge from Z to Y
-	//			HalfEdge_Mesh[he1] = otherHe;
-	//			HalfEdge_Mesh[otherHe] = he1;
-	//		}
-	//		else if (tri.Z == otherTri.X && tri.X == otherTri.Z)
-	//		{
-	//			const int32 otherHe = j * 3 + 0; // other triangle's edge from X to Z
-	//			HalfEdge_Mesh[he2] = otherHe;
-	//			HalfEdge_Mesh[otherHe] = he2;
-	//		}
-	//	}
-	//}
-
-	// --- Map from undirected edge -> one oriented edge index ---
-	//TMap<FEdgeKey, int32> EdgeMap;
-	//EdgeMap.Reserve(NumEdges);
-
-	//for (int32 t = 0; t < NumFaces; ++t)
-	//{
-	//	const int32 Base = 3 * t;
-
-	//	// local edges: (0->1), (1->2), (2->0)
-	//	for (int32 k = 0; k < 3; ++k)
-	//	{
-	//		const int32 e = Base + k;
-	//		const int32 v0 = SphericalTrisFlat[e];
-	//		const int32 v1 = SphericalTrisFlat[Base + (k + 1) % 3];
-
-	//		const FEdgeKey Key(v0, v1);
-
-	//		if (int32* ExistingEdge = EdgeMap.Find(Key))
-	//		{
-	//			// found twin
-	//			const int32 e2 = *ExistingEdge;
-	//			HalfEdge_Mesh[e] = e2;
-	//			HalfEdge_Mesh[e2] = e;
-	//		}
-	//		else
-	//		{
-	//			EdgeMap.Add(Key, e);
-	//		}
-	//	}
-	//}
-
-	for (int32 i = 0; i < SphericalTrisFlat.Num(); i++)
-	{
-
+		Circumcenters.Add(Normalized);
 	}
 }
 
-void UGeoDelaunatorComponent::BuildCBT()
+FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumcenters)
 {
+	FGeoPolygonResult Result;
+
+	const int32 NumSites = FibonacciPoints.Num();
+	const int32 NumTris = SphericalTriangles.Num();
+
+	// Copy circumcenters into output
+	Result.Centers = Circumcenters;
+	Result.Polygons.SetNum(NumSites);
+
+	if (NumTris == 0)
+	{
+		if (NumSites < 2)
+			return Result;
+		if (NumSites == 2)
+		{
+			// Edge case: 2 sites only — hemisphere split (not needed for CBT)
+			return Result;
+		}
+	}
+
+	// --- STEP 1: Collect per-site triangle triples (B, C, TriangleIndex) ---
+	TArray<TArray<TTuple<int32, int32, int32>>> RawPolys;
+	RawPolys.SetNum(NumSites);
+
+	for (int32 t = 0; t < NumTris; ++t)
+	{
+		const FIntVector& Tri = SphericalTriangles[t];
+		for (int j = 0; j < 3; ++j)
+		{
+			int32 A = Tri[j];
+			int32 B = Tri[(j + 1) % 3];
+			int32 C = Tri[(j + 2) % 3];
+			RawPolys[A].Add(MakeTuple(B, C, t));
+		}
+	}
+
+	// --- STEP 2: Reorder each polygon CCW using neighbors ---
+	for (int32 s = 0; s < NumSites; ++s)
+	{
+		const TArray<TTuple<int32, int32, int32>>& Poly = RawPolys[s];
+		if (Poly.Num() == 0) continue;
+
+		TArray<int32> OrderedTris;
+		OrderedTris.Reserve(Poly.Num());
+
+		// Start with the first triple
+		OrderedTris.Add(Poly[0].Get<2>()); // triangle index
+		int32 k = Poly[0].Get<1>();        // next B = C of first triple
+
+		for (int32 i = 1; i < Poly.Num(); ++i)
+		{
+			bool Found = false;
+			for (const auto& Entry : Poly)
+			{
+				if (Entry.Get<0>() == k)
+				{
+					k = Entry.Get<1>();
+					OrderedTris.Add(Entry.Get<2>());
+					Found = true;
+					break;
+				}
+			}
+			if (!Found)
+			{
+				break; // Incomplete loop — probably open polygon
+			}
+		}
+
+		// --- STEP 3: Check if only two triangles (degenerate case) ---
+		if (OrderedTris.Num() == 2)
+		{
+			const FIntVector& tri = SphericalTriangles[OrderedTris[0]];
+			const FVector3d& P0 = FibonacciPoints[tri[0]];
+			const FVector3d& P1 = FibonacciPoints[tri[1]];
+			const FVector3d& P2 = FibonacciPoints[tri[2]];
+
+			FVector3d R0 = SphericalMidpoint(P0, P1, Circumcenters[OrderedTris[0]]);
+			FVector3d R1 = SphericalMidpoint(P2, P0, Circumcenters[OrderedTris[0]]);
+
+			int32 i0 = Result.Centers.Add(R0);
+			int32 i1 = Result.Centers.Add(R1);
+
+			// Final polygon is 4-point pseudo-loop: [C0, R1, C1, R0]
+			TArray<int32> FakePoly = { OrderedTris[0], i1, OrderedTris[1], i0 };
+			Result.Polygons[s] = FakePoly;
+		}
+		else
+		{
+			Result.Polygons[s] = OrderedTris;
+		}
+	}
+
+	return Result;
 }

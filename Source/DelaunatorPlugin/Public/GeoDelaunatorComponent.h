@@ -205,31 +205,10 @@ public:
 };
 
 
-// Edge Key for Half-Edge Mesh building
-struct FEdgeKey
-{
-	int32 A;
-	int32 B;
-
-	FEdgeKey() : A(0), B(0) {}
-	FEdgeKey(int32 InA, int32 InB)
-	{
-		// store as sorted (min,max) so (a,b) and (b,a) map to same key
-		if (InA < InB) { A = InA; B = InB; }
-		else { A = InB; B = InA; }
-	}
-
-	bool operator==(const FEdgeKey& Other) const
-	{
-		return A == Other.A && B == Other.B;
-	}
+struct FGeoPolygonResult {
+	TArray<TArray<int32>> Polygons; // site index -> list of CCW triangle indices (into Circumcenters)
+	TArray<FVector3d> Centers; // final augmented circumcenters
 };
-
-FORCEINLINE uint32 GetTypeHash(const FEdgeKey& Key)
-{
-	// simple hash: combine the two ints
-	return HashCombine(::GetTypeHash(Key.A), ::GetTypeHash(Key.B));
-}
 
 UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class DELAUNATORPLUGIN_API UGeoDelaunatorComponent : public UActorComponent
@@ -320,10 +299,8 @@ protected:
 	};
 
 	// VORONOI
-	TArray<FVector> VorVert3D;
-	TArray<bool> TriValid;
-	TArray<FVector2d> VorVert2D; // circumcenters indexed by tri
-	int32 Pivot{ -1 };
+	TArray<TArray<int32>> VoronoiGeoMesh; // site index -> list of CCW triangle indices into Voronoi Sites
+	TArray<FVector> VoronoiGeoCenters; // a copy of circumcenters, possibly with extra points appended — they are the same base data.But centers can grow later
 
 	// CBT STRUCTURE
 	uint32 D{ 16 }; // CBT Depth
@@ -334,8 +311,8 @@ public:
 	
 	void GenerateFibonacciSphere1();
 	void GenerateFibonacciSphere2();
-	void GeoRotation(int32 PivotIndex);
-	void StereographicProjection(TArray<FVector>& Points);
+	void GeoRotation(int32 PivotIndex);						// NEEDS TO BE MERGED WITH STEREOGRAPHIC PROJECTION
+	void StereographicProjection(TArray<FVector>& Points);	// NEEDS TO MERGE GEOROTATION
 	FVector UnprojectVoronoiVertexToSphereAndInvertRotation(const FVector2d& V2D);
 
 	// FOR DEBUGGING UNUSED VERTICES
@@ -346,15 +323,16 @@ public:
 	void GeoDelaunayFrom();
 
 	// VORONOI
-	// points are in your projection plane (same coords given to Delaunator)
-	static bool ComputeCircumcenter2D(
-		const FVector2d& A,
-		const FVector2d& B,
-		const FVector2d& C,
-		FVector2d& OutCenter);
+	void Geo_Circumcenters(TArray<FVector>& Circumcenters);
+	FGeoPolygonResult Geo_Polygons(TArray<FVector>& Circumcenters);
+	// Optional midpoint helper
+	FORCEINLINE FVector3d SphericalMidpoint(const FVector3d& A, const FVector3d& B, const FVector3d& RefCenter)
+	{
+		FVector3d Mid = (A + B).GetSafeNormal();
+		if (Mid.Dot(RefCenter) < 0.0) Mid *= -1.0; // ensure same hemisphere
+		return Mid;
+	}
 
 
 	// CBT STRUCTURE
-	void BuildHalfedgeMesh();
-	void BuildCBT();
 };
