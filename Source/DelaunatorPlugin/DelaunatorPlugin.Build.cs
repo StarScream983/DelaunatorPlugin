@@ -20,16 +20,19 @@ public class DelaunatorPlugin : ModuleRules
 				// ... add other private include paths required here ...
 			}
 			);
-			
-		
-		PublicDependencyModuleNames.AddRange(
+
+        // Tell the compiler we want to import the ImPlot symbols when linking against ImGui plugin 
+        PrivateDefinitions.Add(string.Format("IMPLOT_API=DLLIMPORT"));
+
+        PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
 				"Core",
 				// ... add other public dependencies that you statically link with here ...
 				"Large_CBT",
 				"SleefPlugin",
-                "SLEEF"
+                "SLEEF",
+				"ImGui"
 			}
 			);
 			
@@ -42,7 +45,8 @@ public class DelaunatorPlugin : ModuleRules
 				"Slate",
 				"SlateCore",
 				// ... add private dependencies that you statically link with here ...	
-			}
+				"Projects",
+            }
 			);
 		
 		
