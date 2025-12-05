@@ -30,7 +30,6 @@ void UGeoDelaunatorComponent::BeginPlay()
 void UGeoDelaunatorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	Super::EndPlay(EndPlayReason);
-	GetWorld()->GetTimerManager().ClearTimer(THandle_Interpolate);
 }
 
 
@@ -169,7 +168,7 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		{
 			const FHalfEdge_CBT& HE = HalfEdge_Buffer[CurrentHalfEdge];
 			const FHalfEdge_CBT& TWIN = HalfEdge_Buffer[HalfEdge_Buffer[CurrentHalfEdge].Twin];
-			ImGui::Text("Twin ID: %d", HalfEdge_Buffer[CurrentHalfEdge].Twin);
+			ImGui::Text("Twin ID: IGNORE");
 			ImGui::Text("Twin.Vert: %d", TWIN.Vert);
 			if (bTWIN_Vert)
 			{
@@ -197,8 +196,19 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 			ImGui::Text("Twin.Twin: %d", TWIN.Twin);
 			if (bTWIN_Twin)
 			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Twin] * PlanetRadius, 25, 12, FColor::Green, false, 1.f / 10.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Twin] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN TWIN: %d"), TWIN.Twin), nullptr, FColor::Orange, 1.f);
+				/*DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Twin] * PlanetRadius, 25, 12, FColor::Green, false, 1.f / 10.f);
+				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Twin] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN TWIN: %d"), TWIN.Twin), nullptr, FColor::Orange, 1.f);*/
+				if (HalfEdge_Buffer.IsValidIndex(TWIN.Twin))
+				{
+					const FHalfEdge_CBT& TwinTwin = HalfEdge_Buffer[TWIN.Twin];
+					FVector Pos = GetOwner()->GetActorLocation() + VoronoiGeoCenters[TwinTwin.Vert] * PlanetRadius;
+					DrawDebugSphere(GetWorld(), Pos, 25, 12, FColor::Green, false, 1.f / 10.f);
+					DrawDebugString(GetWorld(), Pos + FVector(0, 0, 30), FString::Printf(TEXT("TWIN TWIN: %d"), TWIN.Twin), nullptr, FColor::Orange, 1.f);
+				}
+				else
+				{
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation(), TEXT("TWIN TWIN INVALID"), nullptr, FColor::Red, 1.f);
+				}
 			}
 			ImGui::Text("Edge.Edge: %d", TWIN.Edge);
 			if (bTWIN_Edge)
@@ -317,28 +327,9 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	}
 }
 
-void UGeoDelaunatorComponent::Timer_FibonacciInterpolation()
-{
-	UE_LOG(LogTemp, Warning, TEXT("InterpolationT = %d"), InterpolationT);
-	FVector Location = GetOwner()->GetActorLocation();
-
-	float t = FMath::Clamp(InterpolationT, 0.f, 1.f);
-
-	// Slerp between identity and pivot-rotation
-	FQuat Rot = FQuat::Slerp(FQuat::Identity, PivotToSouthQuat, t);
-
-	for(int32 i = 0; i < N; ++i)
-	{
-		const FVector P = FibonacciPoints[i];
-		const FVector Rotated = Rot.RotateVector(P);
-		DrawDebugPoint(GetWorld(), Location + Rotated * PlanetRadius, 4.f, FColor::Green);
-	}
-	InterpolationT += 0.01f;
-}
-
 void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 {
-	if (N <= 99) N = 100; // force minimum points 100
+	//if (N <= 99) N = 100; // force minimum points 100
 
 	FibonacciPoints.Empty();
 	FibonacciPoints.Reserve(N);
@@ -675,31 +666,56 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 			// is replaced with the pivot.
 			Delaunator->triangles[i] = PivotIndex;
 		}
+	}
 
-		// --- 5) Export final triangles in original 3D index space ---
+	// --- 5) Export final triangles in original 3D index space ---
 
-		SphericalTriangles.Empty();
-		SphericalTriangles.Reserve(static_cast<int32>(Delaunator->triangles.size() / 3));
-		SphericalTrisFlat.Empty();
-		SphericalTrisFlat.SetNum(SphericalTriangles.Num() * 3);
+	SphericalTriangles.Empty();
+	SphericalTriangles.Reserve(static_cast<int32>(Delaunator->triangles.size() / 3));
+	SphericalTrisFlat.Empty();
+	SphericalTrisFlat.SetNum(SphericalTriangles.Num() * 3);
 
-		for (std::size_t t = 0; t < Delaunator->triangles.size(); t += 3)
+	// Prepare half-edge structures
+	SphericalHalfEdges.Empty();
+	ReverseEdgesHash.Init(TArray<ReverseHE>(), N);
+
+	// TO DETERMINE THE VALID TRIANGLE HALF-EDGE INDEX, SKIP DEGENERATE TRIANGLES AND TAKE THE VALID HE INDICES
+	int32 ValidTriangleIndex = 0;
+
+	// FIL's GEO_TRIANGLES FUNCTION
+	for (std::size_t t = 0; t < Delaunator->triangles.size(); t += 3)
+	{
+		const int32 a = static_cast<int32>(Delaunator->triangles[t + 0]);
+		const int32 b = static_cast<int32>(Delaunator->triangles[t + 1]);
+		const int32 c = static_cast<int32>(Delaunator->triangles[t + 2]);
+
+		// Skip degenerate triangles (any repeated vertex)
+		// if (a == b || b == c || c == a)	continue;
+
+		if (a != b && b != c)
 		{
-			const int32 a = static_cast<int32>(Delaunator->triangles[t + 0]);
-			const int32 b = static_cast<int32>(Delaunator->triangles[t + 1]);
-			const int32 c = static_cast<int32>(Delaunator->triangles[t + 2]);
+			const FIntVector& tri = FIntVector(a, b, c);
+			SphericalTriangles.Add(tri); // SphericalTriangles.Add(FIntVector(a, b, c));
 
-			// Skip degenerate triangles (any repeated vertex)
-			// if (a == b || b == c || c == a)	continue;
+			SphericalTrisFlat.Add(a);
+			SphericalTrisFlat.Add(b);
+			SphericalTrisFlat.Add(c);
 
-			if (a != b && b != c)
+			// HALF-EDGES BUILDING SETUP --- FIRST PASS ---
+			for (int32 j = 0; j < 3; ++j)
 			{
-				SphericalTriangles.Add(FIntVector(a, b, c));
+				int32 A = tri[j];
+				int32 B = tri[(j + 1) % 3];
+				int32 HE_Index = ValidTriangleIndex * 3 + j; // Half-edge index for valid triangles, to avoid out of bounds indexes
 
-				SphericalTrisFlat.Add(a);
-				SphericalTrisFlat.Add(b);
-				SphericalTrisFlat.Add(c);
+				// Initialize all HEs with -1, we Init here to match the same size as triangles and avoid out of bound indexes.
+				SphericalHalfEdges.Add(-1);
+				// Add reverse mapping (B → A)
+				ReverseEdgesHash[B].Add({ A, HE_Index });
 			}
+
+			// Increment only when a valid triangle
+			ValidTriangleIndex++;
 		}
 	}
 
@@ -715,47 +731,89 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 
 
 	// --- BUILD HALF-EDGE BUFFER FOR CBT ---
-	TMap<TPair<int32, int32>, int32> TwinMap; // maps directed edge (from, to) → halfedge index
-	TwinMap.Empty();
+	//TMap<TPair<int32, int32>, int32> TwinMap; // maps directed edge (from, to) → halfedge index
+	//TwinMap.Empty();
+
+	//for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
+	//{
+	//	const TArray<int32>& Ring = VoronoiGeoMesh[Site];
+	//	int32 NumVerts = Ring.Num();
+	//	if (NumVerts < 3) continue;
+
+	//	int32 FirstH = HalfEdge_Buffer.Num(); // index of first halfedge for this ring
+
+	//	for (int32 k = 0; k < NumVerts; ++k)
+	//	{
+	//		int32 V0 = Ring[k];
+	//		int32 V1 = Ring[(k + 1) % NumVerts];
+	//		int32 VPrev = Ring[(k - 1 + NumVerts) % NumVerts];
+
+	//		int32 h = HalfEdge_Buffer.Emplace(); // reserve new entry
+	//		FHalfEdge_CBT& HE = HalfEdge_Buffer[h];
+
+	//		HE.Vert = V0;    // start vertex of the halfedge
+	//		HE.Face = Site;  // owning Voronoi site
+	//		HE.Next = Ring[(k + 1) % NumVerts];
+	//		HE.Prev = VPrev;
+	//		HE.Twin = V1;
+
+	//		// Set undirected edge key (for optional bisector or hashing later)
+	//		TPair<int32, int32> Edge;
+	//		HE.Edge = V0;
+
+	//		// Handle twins
+	//		TPair<int32, int32> ForwardEdge(V0, V1);
+	//		TPair<int32, int32> ReverseEdge(V1, V0);
+
+	//		if (int32* TwinH = TwinMap.Find(ReverseEdge))
+	//		{
+	//			HE.Twin = *TwinH;
+	//			HalfEdge_Buffer[*TwinH].Twin = h;
+	//		}
+	//		else
+	//		{
+	//			TwinMap.Emplace(ForwardEdge, h);
+	//		}
+	//	}
+	//}
+
+	TMap<TPair<int32, int32>, int32> EdgeToHalfEdge;
 
 	for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
 	{
 		const TArray<int32>& Ring = VoronoiGeoMesh[Site];
 		int32 NumVerts = Ring.Num();
-		if (NumVerts < 3) continue;
-
-		int32 FirstH = HalfEdge_Buffer.Num(); // index of first halfedge for this ring
 
 		for (int32 k = 0; k < NumVerts; ++k)
 		{
 			int32 V0 = Ring[k];
 			int32 V1 = Ring[(k + 1) % NumVerts];
 
-			int32 h = HalfEdge_Buffer.Emplace(); // reserve new entry
+			// Create a new half-edge
+			int32 h = HalfEdge_Buffer.Emplace();
 			FHalfEdge_CBT& HE = HalfEdge_Buffer[h];
 
-			HE.Vert = V0;    // start vertex of the halfedge
-			HE.Face = Site;  // owning Voronoi site
-			HE.Next = FirstH + ((k + 1) % NumVerts);
-			HE.Prev = FirstH + ((k - 1 + NumVerts) % NumVerts);
-			HE.Twin = -1;
-
-			// Set undirected edge key (for optional bisector or hashing later)
-			TPair<int32, int32> Edge;
+			HE.Vert = V0;                      // Start vertex (Voronoi center index)
+			HE.Next = V1;                      // Next Voronoi center in ring
+			HE.Prev = Ring[(k - 1 + NumVerts) % NumVerts];
+			HE.Face = Site;
+			HE.Twin = V1;
 			HE.Edge = V0;
 
-			// Handle twins
-			TPair<int32, int32> ForwardEdge(V0, V1);
-			TPair<int32, int32> ReverseEdge(V1, V0);
+			// Twin assignment
+			TPair<int32, int32> EdgeKey(V0, V1);
+			TPair<int32, int32> ReverseKey(V1, V0);
 
-			if (int32* TwinH = TwinMap.Find(ReverseEdge))
+			if (int32* TwinIndex = EdgeToHalfEdge.Find(ReverseKey))
 			{
-				HE.Twin = *TwinH;
-				HalfEdge_Buffer[*TwinH].Twin = h;
+				int32 TwinH = *TwinIndex;
+
+				//HE.Twin = TwinH;                   // ✅ This is correct!
+				HalfEdge_Buffer[TwinH].Twin = V0;   // ✅ Also set reverse
 			}
 			else
 			{
-				TwinMap.Emplace(ForwardEdge, h);
+				EdgeToHalfEdge.Add(EdgeKey, h);    // Map edge to THIS half-edge index
 			}
 		}
 	}
@@ -799,6 +857,10 @@ void UGeoDelaunatorComponent::Geo_Circumcenters(TArray<FVector>& Circumcenters)
 	}
 }
 
+void UGeoDelaunatorComponent::Geo_Centroids(TArray<FVector>& Circumcenters)
+{
+}
+
 FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumcenters)
 {
 	FGeoPolygonResult Result;
@@ -834,6 +896,24 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 			int32 B = Tri[(j + 1) % 3];
 			int32 C = Tri[(j + 2) % 3];
 			RawPolys[A].Add(MakeTuple(B, C, t));
+
+			// SPHERICAL VORONOI HALF-EDGE 2ND PASS -- BUILDS THE ACTUAL HALF-EDGE STRUCTURE
+			int32 ReverseEdgeStart = A;		// START OF REVERSE HALF-EDGE
+			int32 ReverseEdgeEnd = B;		// END OF REVERSE HALF-EDGE
+			int32 HE_Index = t * 3 + j;		// INDEX OF REVERSE HALF-EDGE
+
+			// Look for reverse match: B → A
+			for (int i = 0; i < ReverseEdgesHash[A].Num(); ++i)
+			{
+				const ReverseHE& entry = ReverseEdgesHash[ReverseEdgeStart][i];
+				if (entry.From == ReverseEdgeEnd)
+				{
+					SphericalHalfEdges[HE_Index] = entry.HalfEdgeIndex;
+					SphericalHalfEdges[entry.HalfEdgeIndex] = HE_Index;
+					ReverseEdgesHash[A].RemoveAtSwap(i); // Remove matched reverse HE to reduce future searches
+					break;
+				}
+			}
 		}
 	}
 

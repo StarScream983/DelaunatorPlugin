@@ -204,10 +204,16 @@ public:
 	}
 };
 
-
+// STRUCT TO HOLD VORONOI POLYGONS AND CIRCUMCENTERs - USED IN GEO_POLYGONS
 struct FGeoPolygonResult {
 	TArray<TArray<int32>> Polygons; // site index -> list of CCW triangle indices (into Circumcenters)
 	TArray<FVector3d> Centers; // final augmented circumcenters
+};
+
+// STRUCT TO HOLD REVERSE HALF-EDGE MAPPING
+struct ReverseHE {
+	int32 From; // index of starting vertex in forward half-edge
+	int32 HalfEdgeIndex; // index into HalfEdges array
 };
 
 UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
@@ -235,7 +241,7 @@ protected:
 	FRandomStream RngStream;
 
 	// FIBONACCI SPHERE
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100", UIMin = "100"), Category = "GeoDelaunator")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100", UIMin = "100"), Category = "GeoDelaunator") 
 	int32 N = 100; // number of Fibonacci points
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1.0", UIMin = "1.0"), Category = "GeoDelaunator")
@@ -256,51 +262,26 @@ protected:
 	TArray<FVector2D> LonLat;
 	TArray<FVector> FibonacciPoints;
 	std::vector<double> coords; // FOR DELAUNAYTOR
-	TArray<FIntVector> SphericalTriangles;
+	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
 	TArray<int32> SphericalTrisFlat;
+	TArray<TArray<ReverseHE>> ReverseEdgesHash; // TRANSIENT - NOT TO BE SAVED - USED IN GEO_POLYGONS
+	TArray<int32> SphericalHalfEdges;
 
-	//STICHING
-	TArray<FVector> PivotedPoints;
 
 	TArray<FVector2D> Projected2D; // FibonacciPoints after Stereographic Projection
 	TArray<int32> IndexMap; // map from ProjectedPoints to LonLat, dunno if needed
 
-	// INTERPOLATION DRAW DEBUG
-	float InterpolationT = 0.f;
+	//STICHING
+	TArray<FVector> PivotedPoints;
+
+	// TEMPORARY ROTATION QUAT - PREVIOUSLY STORED FOR DEBUGGING - NEEDS TO BE REMOVED LATER 
 	FQuat PivotToSouthQuat = FQuat::Identity;
-	FTimerHandle THandle_Interpolate;
-	void Timer_FibonacciInterpolation();
-
-	// HALF EDGE DEBUG
-	int32 TriToDraw{ 0 };
-	int32 VertToDraw{ 0 };
-	FTimerHandle THandle_HalfEdgeDebug;
-	FORCEINLINE int32 IncrementVertID()
-	{
-		if (VertToDraw >= 0 && VertToDraw <= 2) VertToDraw++;
-		if (VertToDraw > 2) VertToDraw = 0;
-		return VertToDraw;
-	};
-
-	FORCEINLINE void Timer_HalfEdgeDebug()
-	{
-		int32 VertID = 0;
-		int32 EndID = 0;
-		if (VertToDraw == 0) { VertID = SphericalTriangles[TriToDraw].X; EndID = SphericalTriangles[TriToDraw].Y; }
-		if (VertToDraw == 1) { VertID = SphericalTriangles[TriToDraw].Y; EndID = SphericalTriangles[TriToDraw].Z; }
-		if (VertToDraw == 2) { VertID = SphericalTriangles[TriToDraw].Z; EndID = SphericalTriangles[TriToDraw].X; }
-		FVector Vert = FibonacciPoints[VertID];
-		FVector End = FibonacciPoints[EndID];
-		DrawDebugPoint(GetWorld(), GetOwner()->GetActorLocation() + Vert*PlanetRadius, 12.f, FColor::Green);
-		DrawDebugLine(GetWorld(), GetOwner()->GetActorLocation() + Vert * PlanetRadius, GetOwner()->GetActorLocation() + End * PlanetRadius, FColor::Blue, false, 1.f/2.f, 0, 12.f);
-		IncrementVertID();
-		if (VertToDraw == 2) TriToDraw++;
-		if (TriToDraw >= SphericalTriangles.Num()) TriToDraw = 0;
-	};
 
 	// VORONOI
-	TArray<TArray<int32>> VoronoiGeoMesh; // site index -> list of CCW triangle indices into Voronoi Sites
-	TArray<FVector> VoronoiGeoCenters; // a copy of circumcenters, possibly with extra points appended — they are the same base data.But centers can grow later
+	TArray<int32> CenterTrianglesMap; // indices into SphericalTriangles, linking circumcenters to triangles for rapid neighbor lookup, and building CBT bufers
+	TArray<TArray<int32>> VoronoiGeoMesh; // site index -> list of CCW triangle indices into Voronoi Sites (AKA VoronoiGeoCenters)
+	TArray<FVector> VoronoiGeoCenters; // CBT VERTEX BUFFER --- a copy of circumcenters, possibly with extra points appended — they are the same base data.But centers can grow later
+	TArray<FVector> VoronoiGeoCentroids; // CBT VERTEX BUFFER --- will probably be used as they are inside the triangles
 
 	// CBT STRUCTURE
 	uint32 D{ 16 }; // CBT Depth
@@ -313,6 +294,7 @@ public:
 	void GenerateFibonacciSphere2();
 	void GeoRotation(int32 PivotIndex);						// NEEDS TO BE MERGED WITH STEREOGRAPHIC PROJECTION
 	void StereographicProjection(TArray<FVector>& Points);	// NEEDS TO MERGE GEOROTATION
+	// DEPRECATED --- TO BE REMOVED LATER
 	FVector UnprojectVoronoiVertexToSphereAndInvertRotation(const FVector2d& V2D);
 
 	// FOR DEBUGGING UNUSED VERTICES
@@ -324,6 +306,7 @@ public:
 
 	// VORONOI
 	void Geo_Circumcenters(TArray<FVector>& Circumcenters);
+	void Geo_Centroids(TArray<FVector>& Circumcenters);
 	FGeoPolygonResult Geo_Polygons(TArray<FVector>& Circumcenters);
 	// Optional midpoint helper
 	FORCEINLINE FVector3d SphericalMidpoint(const FVector3d& A, const FVector3d& B, const FVector3d& RefCenter)
@@ -332,7 +315,6 @@ public:
 		if (Mid.Dot(RefCenter) < 0.0) Mid *= -1.0; // ensure same hemisphere
 		return Mid;
 	}
-
 
 	// CBT STRUCTURE
 };
