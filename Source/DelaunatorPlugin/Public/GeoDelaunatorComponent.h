@@ -211,9 +211,17 @@ struct FGeoPolygonResult {
 };
 
 // STRUCT TO HOLD REVERSE HALF-EDGE MAPPING
-struct ReverseHE {
+struct FReverseHE {
 	int32 From; // index of starting vertex in forward half-edge
 	int32 HalfEdgeIndex; // index into HalfEdges array
+};
+
+struct FVoronoiHalfEdge {
+	int32 VHE_Start; // CC and SphericalTriangle
+	int32 VHE_End;	 // CC and SphericalTriangle
+	int32 Start_Face; // face index for HE_Start
+	int32 End_Face;  // face index for HE_End
+	// maybe add IDs of start and end into spherical triangles
 };
 
 UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
@@ -264,7 +272,7 @@ protected:
 	std::vector<double> coords; // FOR DELAUNAYTOR
 	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
 	TArray<int32> SphericalTrisFlat;
-	TArray<TArray<ReverseHE>> ReverseEdgesHash; // TRANSIENT - NOT TO BE SAVED - USED IN GEO_POLYGONS
+	TArray<TArray<FReverseHE>> ReverseEdgesHash; // TRANSIENT - NOT TO BE SAVED - USED IN GEO_POLYGONS
 	TArray<int32> SphericalHalfEdges;
 
 
@@ -278,7 +286,7 @@ protected:
 	FQuat PivotToSouthQuat = FQuat::Identity;
 
 	// VORONOI
-	TArray<int32> CenterTrianglesMap; // indices into SphericalTriangles, linking circumcenters to triangles for rapid neighbor lookup, and building CBT bufers
+	TArray<TArray<FVoronoiHalfEdge>> VoronoiHalfEdges_Map; // LookUp table for CBT half-edge buffer
 	TArray<TArray<int32>> VoronoiGeoMesh; // site index -> list of CCW triangle indices into Voronoi Sites (AKA VoronoiGeoCenters)
 	TArray<FVector> VoronoiGeoCenters; // CBT VERTEX BUFFER --- a copy of circumcenters, possibly with extra points appended — they are the same base data.But centers can grow later
 	TArray<FVector> VoronoiGeoCentroids; // CBT VERTEX BUFFER --- will probably be used as they are inside the triangles
@@ -317,4 +325,9 @@ public:
 	}
 
 	// CBT STRUCTURE
+
+private:
+	// IMGUI DEBUG
+	void ImGui_DebugHalfEdgeBuffer();
+	void ImGui_DebugVoronoiHalfEdgesMap();
 };

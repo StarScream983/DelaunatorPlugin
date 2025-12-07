@@ -38,17 +38,98 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	#ifdef IMGUI_API
-	static bool bShowVoronoi = true;
-	static bool bShowDelaunay = true;
+	// ...
+	FVector Location = GetOwner()->GetActorLocation();
+	UWorld* WorldActual = GetWorld();
+	if (!WorldActual) return;
+
+	static bool bShowVoronoiVerts = true;
+	static bool bShowVoronoiEdges = true;
+	static bool bShowDelaunaySites = true;
+	static bool bShowDelaunayEdges = true;
+#ifdef IMGUI_API
+
+#pragma region PLANET_GENERAL_DATA_WINDOW
+	if (ImGui::Begin("Delaunay General Data Debug")) {
+		ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+		ImGui::Text("Halfedges: %d", HalfEdge_Buffer.Num());
+		ImGui::Text("Voronoi Sites: %d", VoronoiGeoCenters.Num());
+		ImGui::Text("Triangles: %d", SphericalTriangles.Num());
+	}
+	ImGui::End();
+#pragma endregion PLANET_GENERAL_DATA_WINDOW
+
+#pragma region DRAW_VORONOI_DEBUG_WINDOW
+	static bool bDebugVHEs = false;
+	static int32 SiteID{ 0 };
+	static int32 PolyID{ 0 };
+	if (ImGui::Begin("VHE Debug")) {
+		ImGui::Checkbox("DEBUG VHEs", &bDebugVHEs);
+		if (ImGui::Button("PREV SITE"))
+		{
+			SiteID = FMath::Clamp(SiteID - 1, 0, N - 1);
+			PolyID = 0;
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("NEXT SITE"))
+		{
+			SiteID = FMath::Clamp(SiteID + 1, 0, N - 1);
+			PolyID = 0;
+		}
+		if (bDebugVHEs)
+		{
+			ImGui::Text("CURRENT SITE ID: %d", SiteID);
+			ImGui::Text("VHEs in Site: %d", VoronoiHalfEdges_Map[SiteID].Num());
+			int32 NumPolys = VoronoiHalfEdges_Map[SiteID].Num();
+			if (ImGui::Button("PREV VHE"))
+			{
+				PolyID = (PolyID - 1 + NumPolys) % NumPolys;
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("NEXT VHE"))
+			{
+				PolyID = (PolyID + 1) % NumPolys;
+			}
+			ImGui::Text("CURRENT POLY ID: %d", PolyID);
+			if (VoronoiHalfEdges_Map[SiteID].IsValidIndex(PolyID))
+			{
+				const FVoronoiHalfEdge& VHE = VoronoiHalfEdges_Map[SiteID][PolyID];
+				ImGui::Text("VHE Start: %d", VHE.VHE_Start);
+				ImGui::Text("VHE End: %d", VHE.VHE_End);
+				ImGui::Text("VHE Start Face: %d (Current Site)", VHE.Start_Face);
+				ImGui::Text("VHE End Face: %d", VHE.End_Face);
+				// DEBUG DRAW CURRENT VHE
+				DrawDebugSphere(GetWorld(), Location + VoronoiGeoCenters[VHE.VHE_Start] * PlanetRadius, 20, 20, FColor::Green, false, DeltaTime);
+				DrawDebugString(GetWorld(), Location + VoronoiGeoCenters[VHE.VHE_Start] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VHE START: %d"), VHE.VHE_Start), nullptr, FColor::White, DeltaTime);
+				DrawDebugSphere(GetWorld(), Location + VoronoiGeoCenters[VHE.VHE_End] * PlanetRadius, 20, 20, FColor::Blue, false, DeltaTime);
+				DrawDebugString(GetWorld(), Location + VoronoiGeoCenters[VHE.VHE_End] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VHE END: %d"), VHE.VHE_End), nullptr, FColor::White, DeltaTime);
+				DrawDebugLine(GetWorld(),
+					Location + VoronoiGeoCenters[VHE.VHE_Start] * PlanetRadius,
+					Location + VoronoiGeoCenters[VHE.VHE_End] * PlanetRadius,
+					FColor::Red, false, 1.f / 20.f, 0, DebugLineThickness+3);
+				DrawDebugSphere(GetWorld(), Location + FibonacciPoints[VHE.Start_Face] * PlanetRadius, 20, 20, FColor::Red, false, DeltaTime);
+				DrawDebugString(GetWorld(), Location + FibonacciPoints[VHE.Start_Face] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VHE START FACE: %d"), VHE.Start_Face), nullptr, FColor::White, DeltaTime);
+				DrawDebugSphere(GetWorld(), Location + FibonacciPoints[VHE.End_Face] * PlanetRadius, 20, 20, FColor::Red, false, DeltaTime);
+				DrawDebugString(GetWorld(), Location + FibonacciPoints[VHE.End_Face] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VHE END: %d"), VHE.VHE_End), nullptr, FColor::White, DeltaTime);
+				DrawDebugLine(GetWorld(),
+					Location + FibonacciPoints[VHE.Start_Face] * PlanetRadius,
+					Location + FibonacciPoints[VHE.End_Face] * PlanetRadius,
+					FColor::Orange, false, 1.f / 20.f, 0, DebugLineThickness+3);
+			}
+		}
+	}
+	ImGui::End();
+#pragma endregion DRAW_VORONOI_DEBUG_WINDOW
+
+#pragma region CBT_DEBUG_WINDOW
 	static int32 CurrentHalfEdge = 0;
 	// CURRENT HALF EDGE NAVIGATION BOOLEAN DEBUGs
-	static bool bHE_Vert = true;
-	static bool bHE_Face = true;
-	static bool bHE_Next = true;
-	static bool bHE_Prev = true;
-	static bool bHE_Twin = true;
-	static bool bHE_Edge = true;
+	static bool bHE_Vert = false;
+	static bool bHE_Face = false;
+	static bool bHE_Next = false;
+	static bool bHE_Prev = false;
+	static bool bHE_Twin = false;
+	static bool bHE_Edge = false;
 	// TWIN HALF EDGE NAVIGATION BOOLEAN DEBUGs
 	static bool bTWIN_Vert = false;
 	static bool bTWIN_Face = false;
@@ -57,205 +138,210 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	static bool bTWIN_Twin = false;
 	static bool bTWIN_Edge = false;
 	if (ImGui::Begin("CBT Debug")) {
-		ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-		ImGui::Text("Halfedges: %d", HalfEdge_Buffer.Num());
-		ImGui::Text("Voronoi Sites: %d", VoronoiGeoCenters.Num());
-		ImGui::Text("Triangles: %d", SphericalTriangles.Num());
-		ImGui::Checkbox("Show Voronoi Graph", &bShowVoronoi);
-		ImGui::Checkbox("Show Delaunay Triangles", &bShowDelaunay);
-
-		ImGui::Dummy(ImVec2(0.0f, 7.0f));
-		ImGui::Separator();
-		ImGui::Dummy(ImVec2(0.0f, 7.0f));
-
-		// --- Start two columns ---
-		ImGui::Columns(2, "DEBUG TOGGLEs", false); // false = no border
-		// HALF EDGE DEBUG DRAW TOGGLES
-		ImGui::Checkbox("HE Vert", &bHE_Vert);
-		ImGui::Checkbox("HE Face", &bHE_Face);
-		ImGui::Checkbox("HE Next", &bHE_Next);
-		ImGui::Checkbox("HE Prev", &bHE_Prev);
-		ImGui::Checkbox("HE Twin", &bHE_Twin);
-		ImGui::Checkbox("HE Edge", &bHE_Edge);
-
-		// ===== RIGHT COLUMN =====
-		ImGui::NextColumn();
-		// HALF EDGE TWIN DEBUG DRAW TOGGLES
-		ImGui::Checkbox("TWIN Vert", &bTWIN_Vert);
-		ImGui::Checkbox("TWIN Face", &bTWIN_Face);
-		ImGui::Checkbox("TWIN Next", &bTWIN_Next);
-		ImGui::Checkbox("TWIN Prev", &bTWIN_Prev);
-		ImGui::Checkbox("TWIN Twin", &bTWIN_Twin);
-		ImGui::Checkbox("TWIN Edge", &bTWIN_Edge);
-
-		// Done with columns
-		ImGui::Columns(1);
-
-		ImGui::Dummy(ImVec2(0.0f, 7.0f));
-		ImGui::Separator();
-		ImGui::Dummy(ImVec2(0.0f, 7.0f));
-
-		if (ImGui::Button("PREV"))
-		{
-			CurrentHalfEdge = FMath::Clamp(CurrentHalfEdge - 1, 0, HalfEdge_Buffer.Num() - 1);
-			GEngine->AddOnScreenDebugMessage(-1, 1.5f, FColor::Cyan, TEXT("BACK"));
-		}
-
+		ImGui::Checkbox("Show Voronoi Verts", &bShowVoronoiVerts);
 		ImGui::SameLine();
+		ImGui::Checkbox("Show Voronoi Edges", &bShowVoronoiEdges);
+		ImGui::Checkbox("Show Delaunay Sites", &bShowDelaunaySites);
+		ImGui::SameLine();
+		ImGui::Checkbox("Show Delaunay Edges", &bShowDelaunayEdges);
 
-		if (ImGui::Button("NEXT"))
+		ImGui::Dummy(ImVec2(0.0f, 7.0f));
+		ImGui::Separator();
+		ImGui::Dummy(ImVec2(0.0f, 7.0f));
+
+		if (ImGui::CollapsingHeader("My Collapsible Area"))
 		{
-			CurrentHalfEdge = FMath::Clamp(CurrentHalfEdge + 1, 0, HalfEdge_Buffer.Num() - 1);
-			GEngine->AddOnScreenDebugMessage(-1, 1.5f, FColor::Green, TEXT("NEXT"));
-		}
+			// --- Start two columns ---
+			ImGui::Columns(2, "DEBUG TOGGLEs", true); // false = no border
+			// HALF EDGE DEBUG DRAW TOGGLES
+			ImGui::Checkbox("HE Vert", &bHE_Vert);
+			ImGui::Checkbox("HE Face", &bHE_Face);
+			ImGui::Checkbox("HE Next", &bHE_Next);
+			ImGui::Checkbox("HE Prev", &bHE_Prev);
+			ImGui::Checkbox("HE Twin", &bHE_Twin);
+			ImGui::Checkbox("HE Edge", &bHE_Edge);
 
-		// --- Start two columns ---
-		ImGui::Columns(2, "HalfEdgeColumns", false); // false = no border
+			// ===== RIGHT COLUMN =====
+			ImGui::NextColumn();
+			// HALF EDGE TWIN DEBUG DRAW TOGGLES
+			ImGui::Checkbox("TWIN Vert", &bTWIN_Vert);
+			ImGui::Checkbox("TWIN Face", &bTWIN_Face);
+			ImGui::Checkbox("TWIN Next", &bTWIN_Next);
+			ImGui::Checkbox("TWIN Prev", &bTWIN_Prev);
+			ImGui::Checkbox("TWIN Twin", &bTWIN_Twin);
+			ImGui::Checkbox("TWIN Edge", &bTWIN_Edge);
 
-		ImGui::Text("CURRENT HALF EDGE NODE");
-		if (HalfEdge_Buffer.IsValidIndex(CurrentHalfEdge))
-		{
-			const FHalfEdge_CBT& HE = HalfEdge_Buffer[CurrentHalfEdge];
-			ImGui::Text("HalfEdge ID: %d", CurrentHalfEdge);
-			ImGui::Text("Vert: %d", HE.Vert); // debug draw sphere
-			if (bHE_Vert)
-			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Vert] * PlanetRadius, 20, 20, FColor::Green, false, 1.f / 20.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Vert] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VERT: %d"), HE.Vert), nullptr, FColor::White, 1.f);
-			}
-			ImGui::Text("Face: %d", HE.Face); // debug draw Fibonacci Point
-			if (bHE_Face)
-			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + FibonacciPoints[HE.Face] * PlanetRadius, 20, 20, FColor::Green, false, 1.f / 20.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + FibonacciPoints[HE.Face] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("Face: %d"), HE.Face), nullptr, FColor::White, 1.f);
-			}
-			ImGui::Text("Next: %d", HE.Next); // debug draw sphere
-			if (bHE_Next)
-			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Next] * PlanetRadius, 20, 20, FColor::Green, false, 1.f / 20.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Next] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("Next: %d"), HE.Next), nullptr, FColor::White, 1.f);
-			}
-			ImGui::Text("Prev: %d", HE.Prev); // debug draw sphere
-			if (bHE_Prev)
-			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Prev] * PlanetRadius, 20, 20, FColor::Green, false, 1.f / 20.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Prev] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("Prev: %d"), HE.Prev), nullptr, FColor::White, 1.f);
-			}
-			ImGui::Text("Twin: %d", HE.Twin); // debug draw vertex Blue and/or arrow
-			if (bHE_Twin)
-			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Twin] * PlanetRadius, 25, 12, FColor::Blue, false, 1.f / 20.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Twin] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("Twin: %d"), HE.Twin), nullptr, FColor::White, 1.f);
-			}
-			ImGui::Text("Edge: %d", HE.Edge); // debug draw arrow
-			if (bHE_Edge)
-			{
-				FVector Start = GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Vert] * PlanetRadius;
-				FVector End = GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Next] * PlanetRadius;
-				DrawDebugDirectionalArrow(GetWorld(), Start, End, 10.f, FColor::Green, false, 1.f / 20.f, 0, DebugLineThickness + 3);
-			}
-		}
-		else
-		{
-			ImGui::Text("Invalid HalfEdge ID");
-		}
+			// Done with columns
+			ImGui::Columns(1);
 
-		// ===== RIGHT COLUMN =====
-		ImGui::NextColumn();
+			ImGui::Dummy(ImVec2(0.0f, 7.0f));
+			ImGui::Separator();
+			ImGui::Dummy(ImVec2(0.0f, 7.0f));
 
-		ImGui::Text("TWIN HALF EDGE NODE");
-		if (HalfEdge_Buffer.IsValidIndex(HalfEdge_Buffer[CurrentHalfEdge].Twin))
-		{
-			const FHalfEdge_CBT& HE = HalfEdge_Buffer[CurrentHalfEdge];
-			const FHalfEdge_CBT& TWIN = HalfEdge_Buffer[HalfEdge_Buffer[CurrentHalfEdge].Twin];
-			ImGui::Text("Twin ID: IGNORE");
-			ImGui::Text("Twin.Vert: %d", TWIN.Vert);
-			if (bTWIN_Vert)
+			if (ImGui::Button("PREV"))
 			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Vert] * PlanetRadius, 20, 12, FColor::Blue, false, 1.f / 10.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Vert] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN VERT: %d"), TWIN.Vert), nullptr, FColor::Orange, 1.f);
+				CurrentHalfEdge = FMath::Clamp(CurrentHalfEdge - 1, 0, HalfEdge_Buffer.Num() - 1);
+				GEngine->AddOnScreenDebugMessage(-1, 1.5f, FColor::Cyan, TEXT("BACK"));
 			}
-			ImGui::Text("Twin.Face: %d", TWIN.Face);
-			if (bTWIN_Face)
+
+			ImGui::SameLine();
+
+			if (ImGui::Button("NEXT"))
 			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + FibonacciPoints[TWIN.Face] * PlanetRadius, 20, 12, FColor::Blue, false, 1.f / 10.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + FibonacciPoints[TWIN.Face] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN FACE: %d"), TWIN.Face), nullptr, FColor::Orange, 1.f);
+				CurrentHalfEdge = FMath::Clamp(CurrentHalfEdge + 1, 0, HalfEdge_Buffer.Num() - 1);
+				GEngine->AddOnScreenDebugMessage(-1, 1.5f, FColor::Green, TEXT("NEXT"));
 			}
-			ImGui::Text("Twin.Next: %d", TWIN.Next);
-			if (bTWIN_Next)
+
+			// --- Start two columns ---
+			ImGui::Columns(2, "HalfEdgeColumns", false); // false = no border
+
+			ImGui::Text("CURRENT HALF EDGE NODE");
+			if (HalfEdge_Buffer.IsValidIndex(CurrentHalfEdge))
 			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Next] * PlanetRadius, 20, 12, FColor::Blue, false, 1.f / 10.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Next] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN NEXT: %d"), TWIN.Next), nullptr, FColor::Orange, 1.f);
-			}
-			ImGui::Text("Twin.Prev: %d", TWIN.Prev);
-			if (bTWIN_Prev)
-			{
-				DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Prev] * PlanetRadius, 20, 12, FColor::Blue, false, 1.f / 10.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Prev] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN PREV: %d"), TWIN.Prev), nullptr, FColor::Orange, 1.f);
-			}
-			ImGui::Text("Twin.Twin: %d", TWIN.Twin);
-			if (bTWIN_Twin)
-			{
-				/*DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Twin] * PlanetRadius, 25, 12, FColor::Green, false, 1.f / 10.f);
-				DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Twin] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN TWIN: %d"), TWIN.Twin), nullptr, FColor::Orange, 1.f);*/
-				if (HalfEdge_Buffer.IsValidIndex(TWIN.Twin))
+				const FHalfEdge_CBT& HE = HalfEdge_Buffer[CurrentHalfEdge];
+				ImGui::Text("HalfEdge ID: %d", CurrentHalfEdge);
+				ImGui::Text("Vert: %d", HE.Vert); // debug draw sphere
+				if (bHE_Vert)
 				{
-					const FHalfEdge_CBT& TwinTwin = HalfEdge_Buffer[TWIN.Twin];
-					FVector Pos = GetOwner()->GetActorLocation() + VoronoiGeoCenters[TwinTwin.Vert] * PlanetRadius;
-					DrawDebugSphere(GetWorld(), Pos, 25, 12, FColor::Green, false, 1.f / 10.f);
-					DrawDebugString(GetWorld(), Pos + FVector(0, 0, 30), FString::Printf(TEXT("TWIN TWIN: %d"), TWIN.Twin), nullptr, FColor::Orange, 1.f);
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Vert] * PlanetRadius, 20, 20, FColor::Green, false, 1.f / 20.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Vert] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VERT: %d"), HE.Vert), nullptr, FColor::White, 1.f);
 				}
-				else
+				ImGui::Text("Face: %d", HE.Face); // debug draw Fibonacci Point
+				if (bHE_Face)
 				{
-					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation(), TEXT("TWIN TWIN INVALID"), nullptr, FColor::Red, 1.f);
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + FibonacciPoints[HE.Face] * PlanetRadius, 20, 20, FColor::Green, false, 1.f / 20.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + FibonacciPoints[HE.Face] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("Face: %d"), HE.Face), nullptr, FColor::White, 1.f);
+				}
+				ImGui::Text("Next: %d", HE.Next); // debug draw sphere
+				if (bHE_Next)
+				{
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Next] * PlanetRadius, 20, 20, FColor::Green, false, 1.f / 20.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Next] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("Next: %d"), HE.Next), nullptr, FColor::White, 1.f);
+				}
+				ImGui::Text("Prev: %d", HE.Prev); // debug draw sphere
+				if (bHE_Prev)
+				{
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Prev] * PlanetRadius, 20, 20, FColor::Green, false, 1.f / 20.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Prev] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("Prev: %d"), HE.Prev), nullptr, FColor::White, 1.f);
+				}
+				ImGui::Text("Twin: %d", HE.Twin); // debug draw vertex Blue and/or arrow
+				if (bHE_Twin)
+				{
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Twin] * PlanetRadius, 25, 12, FColor::Blue, false, 1.f / 20.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Twin] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("Twin: %d"), HE.Twin), nullptr, FColor::White, 1.f);
+				}
+				ImGui::Text("Edge: %d", HE.Edge); // debug draw arrow
+				if (bHE_Edge)
+				{
+					FVector Start = GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Vert] * PlanetRadius;
+					FVector End = GetOwner()->GetActorLocation() + VoronoiGeoCenters[HE.Next] * PlanetRadius;
+					DrawDebugDirectionalArrow(GetWorld(), Start, End, 10.f, FColor::Green, false, 1.f / 20.f, 0, DebugLineThickness + 3);
 				}
 			}
-			ImGui::Text("Edge.Edge: %d", TWIN.Edge);
-			if (bTWIN_Edge)
+			else
 			{
-				FVector Start = GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Vert] * PlanetRadius;
-				FVector End = GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Next] * PlanetRadius;
-				DrawDebugDirectionalArrow(GetWorld(), Start, End, 10.f, FColor::Blue, false, 1.f / 10.f, 0, DebugLineThickness + 3);
+				ImGui::Text("Invalid HalfEdge ID");
 			}
-		}
-		else
-		{
-			ImGui::Text("No valid twin");
-		}
 
-		// Done with columns
-		ImGui::Columns(1);
+			// ===== RIGHT COLUMN =====
+			ImGui::NextColumn();
+
+			ImGui::Text("TWIN HALF EDGE NODE");
+			if (HalfEdge_Buffer.IsValidIndex(HalfEdge_Buffer[CurrentHalfEdge].Twin))
+			{
+				const FHalfEdge_CBT& HE = HalfEdge_Buffer[CurrentHalfEdge];
+				const FHalfEdge_CBT& TWIN = HalfEdge_Buffer[HalfEdge_Buffer[CurrentHalfEdge].Twin];
+				ImGui::Text("Twin ID: IGNORE");
+				ImGui::Text("Twin.Vert: %d", TWIN.Vert);
+				if (bTWIN_Vert)
+				{
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Vert] * PlanetRadius, 20, 12, FColor::Blue, false, 1.f / 10.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Vert] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN VERT: %d"), TWIN.Vert), nullptr, FColor::Orange, 1.f);
+				}
+				ImGui::Text("Twin.Face: %d", TWIN.Face);
+				if (bTWIN_Face)
+				{
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + FibonacciPoints[TWIN.Face] * PlanetRadius, 20, 12, FColor::Blue, false, 1.f / 10.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + FibonacciPoints[TWIN.Face] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN FACE: %d"), TWIN.Face), nullptr, FColor::Orange, 1.f);
+				}
+				ImGui::Text("Twin.Next: %d", TWIN.Next);
+				if (bTWIN_Next)
+				{
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Next] * PlanetRadius, 20, 12, FColor::Blue, false, 1.f / 10.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Next] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN NEXT: %d"), TWIN.Next), nullptr, FColor::Orange, 1.f);
+				}
+				ImGui::Text("Twin.Prev: %d", TWIN.Prev);
+				if (bTWIN_Prev)
+				{
+					DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Prev] * PlanetRadius, 20, 12, FColor::Blue, false, 1.f / 10.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Prev] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN PREV: %d"), TWIN.Prev), nullptr, FColor::Orange, 1.f);
+				}
+				ImGui::Text("Twin.Twin: %d", TWIN.Twin);
+				if (bTWIN_Twin)
+				{
+					/*DrawDebugSphere(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Twin] * PlanetRadius, 25, 12, FColor::Green, false, 1.f / 10.f);
+					DrawDebugString(GetWorld(), GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Twin] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("TWIN TWIN: %d"), TWIN.Twin), nullptr, FColor::Orange, 1.f);*/
+					if (HalfEdge_Buffer.IsValidIndex(TWIN.Twin))
+					{
+						const FHalfEdge_CBT& TwinTwin = HalfEdge_Buffer[TWIN.Twin];
+						FVector Pos = GetOwner()->GetActorLocation() + VoronoiGeoCenters[TwinTwin.Vert] * PlanetRadius;
+						DrawDebugSphere(GetWorld(), Pos, 25, 12, FColor::Green, false, 1.f / 10.f);
+						DrawDebugString(GetWorld(), Pos + FVector(0, 0, 30), FString::Printf(TEXT("TWIN TWIN: %d"), TWIN.Twin), nullptr, FColor::Orange, 1.f);
+					}
+					else
+					{
+						DrawDebugString(GetWorld(), GetOwner()->GetActorLocation(), TEXT("TWIN TWIN INVALID"), nullptr, FColor::Red, 1.f);
+					}
+				}
+				ImGui::Text("Edge.Edge: %d", TWIN.Edge);
+				if (bTWIN_Edge)
+				{
+					FVector Start = GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Vert] * PlanetRadius;
+					FVector End = GetOwner()->GetActorLocation() + VoronoiGeoCenters[TWIN.Next] * PlanetRadius;
+					DrawDebugDirectionalArrow(GetWorld(), Start, End, 10.f, FColor::Blue, false, 1.f / 10.f, 0, DebugLineThickness + 3);
+				}
+			}
+			else
+			{
+				ImGui::Text("No valid twin");
+			}
+
+			// Done with columns
+			ImGui::Columns(1);
+		}
 	}
 	ImGui::End();
-	#endif
+#pragma endregion CBT_DEBUG_WINDOW
 
-	// ...
-	FVector Location = GetOwner()->GetActorLocation();
-	UWorld* WorldActual = GetWorld();
-	if (!WorldActual) return;
-	
-	if (bShowDelaunay)
-	{
-		for (int32 i = 0; i < N; i++)
+#endif
+
+	// SPHERE DELAUNAY DEBUG DRAW
+		if(bShowDelaunaySites)
 		{
-			//UE_LOG(LogTemp, Warning, TEXT("Point: %s"), *point.ToString());
-			DrawDebugPoint(GetWorld(), Location + FibonacciPoints[i] * PlanetRadius, DebugPointScale, FColor::Red);
-			//DrawDebugPoint(GetWorld(), Location + PivotedPoints[i] * PlanetRadius, DebugPointScale, FColor::Blue);
-			//if (i < 999) DrawDebugPoint(GetWorld(), Location + FVector(Projected2D[i].X, Projected2D[i].Y, Location.Z)*PlanetRadius, DebugPointScale, FColor::Magenta);
+			for (int32 i = 0; i < N; i++)
+			{
+				//UE_LOG(LogTemp, Warning, TEXT("Point: %s"), *point.ToString());
+				DrawDebugPoint(GetWorld(), Location + FibonacciPoints[i] * PlanetRadius, DebugPointScale, FColor::Red);
+				//DrawDebugPoint(GetWorld(), Location + PivotedPoints[i] * PlanetRadius, DebugPointScale, FColor::Blue);
+				//if (i < 999) DrawDebugPoint(GetWorld(), Location + FVector(Projected2D[i].X, Projected2D[i].Y, Location.Z)*PlanetRadius, DebugPointScale, FColor::Magenta);
+			}
 		}
 
-		for (const FIntVector& tri : SphericalTriangles)
+		if (bShowDelaunayEdges)
 		{
-			const FVector A = FibonacciPoints[tri.X] * PlanetRadius + Location;
-			const FVector B = FibonacciPoints[tri.Y] * PlanetRadius + Location;
-			const FVector C = FibonacciPoints[tri.Z] * PlanetRadius + Location;
+			for (const FIntVector& tri : SphericalTriangles)
+			{
+				const FVector A = FibonacciPoints[tri.X] * PlanetRadius + Location;
+				const FVector B = FibonacciPoints[tri.Y] * PlanetRadius + Location;
+				const FVector C = FibonacciPoints[tri.Z] * PlanetRadius + Location;
 
-			DrawDebugLine(GetWorld(), A, B, FColor::Black, false, 0.f, 0, DebugLineThickness);
-			DrawDebugLine(GetWorld(), B, C, FColor::Black, false, 0.f, 0, DebugLineThickness);
-			DrawDebugLine(GetWorld(), C, A, FColor::Black, false, 0.f, 0, DebugLineThickness);
+				DrawDebugLine(GetWorld(), A, B, FColor::Black, false, 0.f, 0, DebugLineThickness);
+				DrawDebugLine(GetWorld(), B, C, FColor::Black, false, 0.f, 0, DebugLineThickness);
+				DrawDebugLine(GetWorld(), C, A, FColor::Black, false, 0.f, 0, DebugLineThickness);
+			}
 		}
-	}
 
+#pragma region VORONOI_DEBUG_DRAW_2D
 	// 2D VORONOI
 	//auto To3D = [](const FVector2d& P2D)
 	//	{
@@ -301,9 +387,10 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	//			Color, false, 0.f, 0, DebugLineThickness);
 	//	}
 	//}
+#pragma endregion
 
-	// SPHERE VORONOI
-	if (bShowVoronoi)
+	// SPHERE VORONOI DEBUG DRAW
+	if (bShowVoronoiVerts || bShowVoronoiEdges)
 	{
 		for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
 		{
@@ -320,8 +407,8 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 				const FVector A = VoronoiGeoCenters[i0] * PlanetRadius + Location;
 				const FVector B = VoronoiGeoCenters[i1] * PlanetRadius + Location;
 
-				DrawDebugLine(GetWorld(), A, B, FColor::White, false, 0, 0, DebugLineThickness);
-				DrawDebugPoint(GetWorld(), A, DebugPointScale, FColor::Blue);
+				if (bShowVoronoiVerts) DrawDebugPoint(GetWorld(), A, DebugPointScale, FColor::Blue);
+				if (bShowVoronoiEdges) DrawDebugLine(GetWorld(), A, B, FColor::White, false, 0, 0, DebugLineThickness);
 			}
 		}
 	}
@@ -677,7 +764,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 
 	// Prepare half-edge structures
 	SphericalHalfEdges.Empty();
-	ReverseEdgesHash.Init(TArray<ReverseHE>(), N);
+	ReverseEdgesHash.Init(TArray<FReverseHE>(), N);
 
 	// TO DETERMINE THE VALID TRIANGLE HALF-EDGE INDEX, SKIP DEGENERATE TRIANGLES AND TAKE THE VALID HE INDICES
 	int32 ValidTriangleIndex = 0;
@@ -723,7 +810,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	TArray<FVector3d> Circumcenters; // transiant to build VoronoiGeoCenters
 	Circumcenters.Empty();
 	Circumcenters.Reserve(SphericalTriangles.Num());
-	Geo_Circumcenters(Circumcenters);
+	Geo_Centroids(Circumcenters);
 
 	FGeoPolygonResult tempResult = Geo_Polygons(Circumcenters);
 	VoronoiGeoMesh = tempResult.Polygons;
@@ -731,92 +818,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 
 
 	// --- BUILD HALF-EDGE BUFFER FOR CBT ---
-	//TMap<TPair<int32, int32>, int32> TwinMap; // maps directed edge (from, to) → halfedge index
-	//TwinMap.Empty();
-
-	//for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
-	//{
-	//	const TArray<int32>& Ring = VoronoiGeoMesh[Site];
-	//	int32 NumVerts = Ring.Num();
-	//	if (NumVerts < 3) continue;
-
-	//	int32 FirstH = HalfEdge_Buffer.Num(); // index of first halfedge for this ring
-
-	//	for (int32 k = 0; k < NumVerts; ++k)
-	//	{
-	//		int32 V0 = Ring[k];
-	//		int32 V1 = Ring[(k + 1) % NumVerts];
-	//		int32 VPrev = Ring[(k - 1 + NumVerts) % NumVerts];
-
-	//		int32 h = HalfEdge_Buffer.Emplace(); // reserve new entry
-	//		FHalfEdge_CBT& HE = HalfEdge_Buffer[h];
-
-	//		HE.Vert = V0;    // start vertex of the halfedge
-	//		HE.Face = Site;  // owning Voronoi site
-	//		HE.Next = Ring[(k + 1) % NumVerts];
-	//		HE.Prev = VPrev;
-	//		HE.Twin = V1;
-
-	//		// Set undirected edge key (for optional bisector or hashing later)
-	//		TPair<int32, int32> Edge;
-	//		HE.Edge = V0;
-
-	//		// Handle twins
-	//		TPair<int32, int32> ForwardEdge(V0, V1);
-	//		TPair<int32, int32> ReverseEdge(V1, V0);
-
-	//		if (int32* TwinH = TwinMap.Find(ReverseEdge))
-	//		{
-	//			HE.Twin = *TwinH;
-	//			HalfEdge_Buffer[*TwinH].Twin = h;
-	//		}
-	//		else
-	//		{
-	//			TwinMap.Emplace(ForwardEdge, h);
-	//		}
-	//	}
-	//}
-
-	TMap<TPair<int32, int32>, int32> EdgeToHalfEdge;
-
-	for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
-	{
-		const TArray<int32>& Ring = VoronoiGeoMesh[Site];
-		int32 NumVerts = Ring.Num();
-
-		for (int32 k = 0; k < NumVerts; ++k)
-		{
-			int32 V0 = Ring[k];
-			int32 V1 = Ring[(k + 1) % NumVerts];
-
-			// Create a new half-edge
-			int32 h = HalfEdge_Buffer.Emplace();
-			FHalfEdge_CBT& HE = HalfEdge_Buffer[h];
-
-			HE.Vert = V0;                      // Start vertex (Voronoi center index)
-			HE.Next = V1;                      // Next Voronoi center in ring
-			HE.Prev = Ring[(k - 1 + NumVerts) % NumVerts];
-			HE.Face = Site;
-			HE.Twin = V1;
-			HE.Edge = V0;
-
-			// Twin assignment
-			TPair<int32, int32> EdgeKey(V0, V1);
-			TPair<int32, int32> ReverseKey(V1, V0);
-
-			if (int32* TwinIndex = EdgeToHalfEdge.Find(ReverseKey))
-			{
-				int32 TwinH = *TwinIndex;
-
-				//HE.Twin = TwinH;                   // ✅ This is correct!
-				HalfEdge_Buffer[TwinH].Twin = V0;   // ✅ Also set reverse
-			}
-			else
-			{
-				EdgeToHalfEdge.Add(EdgeKey, h);    // Map edge to THIS half-edge index
-			}
-		}
-	}
+	
 
 
 	//UE_LOG(LogTemp, Warning, TEXT("HE: %d"), HalfEdge_Mesh.Num());
@@ -859,6 +861,14 @@ void UGeoDelaunatorComponent::Geo_Circumcenters(TArray<FVector>& Circumcenters)
 
 void UGeoDelaunatorComponent::Geo_Centroids(TArray<FVector>& Circumcenters)
 {
+	for (const FIntVector& Tri : SphericalTriangles)
+	{
+		const FVector3d& A = FibonacciPoints[Tri.X];
+		const FVector3d& B = FibonacciPoints[Tri.Y];
+		const FVector3d& C = FibonacciPoints[Tri.Z];
+
+		Circumcenters.Add((A + B + C) / 3.0);
+	}
 }
 
 FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumcenters)
@@ -897,7 +907,7 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 			int32 C = Tri[(j + 2) % 3];
 			RawPolys[A].Add(MakeTuple(B, C, t));
 
-			// SPHERICAL VORONOI HALF-EDGE 2ND PASS -- BUILDS THE ACTUAL HALF-EDGE STRUCTURE
+			// SPHERICAL VORONOI HALF-EDGE 2ND PASS -- BUILDS THE ACTUAL HALF-EDGE STRUCTURE -- NOT FIL's CODE
 			int32 ReverseEdgeStart = A;		// START OF REVERSE HALF-EDGE
 			int32 ReverseEdgeEnd = B;		// END OF REVERSE HALF-EDGE
 			int32 HE_Index = t * 3 + j;		// INDEX OF REVERSE HALF-EDGE
@@ -905,7 +915,7 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 			// Look for reverse match: B → A
 			for (int i = 0; i < ReverseEdgesHash[A].Num(); ++i)
 			{
-				const ReverseHE& entry = ReverseEdgesHash[ReverseEdgeStart][i];
+				const FReverseHE& entry = ReverseEdgesHash[ReverseEdgeStart][i];
 				if (entry.From == ReverseEdgeEnd)
 				{
 					SphericalHalfEdges[HE_Index] = entry.HalfEdgeIndex;
@@ -916,6 +926,9 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 			}
 		}
 	}
+
+	VoronoiHalfEdges_Map.Empty();
+	VoronoiHalfEdges_Map.SetNum(NumSites);
 
 	// --- STEP 2: Reorder each polygon CCW using neighbors ---
 	for (int32 s = 0; s < NumSites; ++s)
@@ -930,6 +943,9 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 		OrderedTris.Add(Poly[0].Get<2>()); // triangle index
 		int32 k = Poly[0].Get<1>();        // next B = C of first triple
 
+		int32 _VHE_Start = Poly[0].Get<2>();     // Triangle index = circumcenter index
+		const int32 _Start_Face = s;             // The site this polygon belongs to
+
 		for (int32 i = 1; i < Poly.Num(); ++i)
 		{
 			bool Found = false;
@@ -937,6 +953,13 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 			{
 				if (Entry.Get<0>() == k)
 				{
+					// VORONOI HALF-EDGE STORAGE -- NOT FIL's CODE
+					const int32 _VHE_End = Entry.Get<2>(); // Triangle index = circumcenter index
+					const int32 _End_Face = k;             // The site the twin half-edge belongs to
+					VoronoiHalfEdges_Map[s].Add(FVoronoiHalfEdge(_VHE_Start, _VHE_End, _Start_Face, _End_Face));
+					_VHE_Start = _VHE_End;
+
+					// VORONOI HALF-EDGE BUILDING -- FIL's CODE
 					k = Entry.Get<1>();
 					OrderedTris.Add(Entry.Get<2>());
 					Found = true;
@@ -947,6 +970,15 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 			{
 				break; // Incomplete loop — probably open polygon
 			}
+		}
+
+		if (OrderedTris.Num() >= 2)
+		{
+			int32 Last = _VHE_Start;            // Last triangle index added
+			int32 First = Poly[0].Get<2>();     // First triangle index
+			int32 EndFace = Poly[0].Get<0>();   // Twin face of first triangle
+
+			VoronoiHalfEdges_Map[s].Add(FVoronoiHalfEdge(Last, First, _Start_Face, EndFace));
 		}
 
 		// --- STEP 3: Check if only two triangles (degenerate case) ---
