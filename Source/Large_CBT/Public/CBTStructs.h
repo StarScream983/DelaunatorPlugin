@@ -29,3 +29,49 @@ struct FHalfEdge_CBT
     int32 Edge;
     int32 Face;
 };
+
+// Pointer to an invalid neighbor or index
+#define INVALID_POINTER 2147483647
+
+// Possible culling state
+#define BACK_FACE_CULLED -3
+#define FRUSTUM_CULLED -2
+#define TOO_SMALL -1
+#define UNCHANGED_ELEMENT 0
+#define BISECT_ELEMENT 1
+#define SIMPLIFY_ELEMENT 2
+#define MERGED_ELEMENT 3
+
+// Root Bisector Buffer
+struct FRootBisector_CBT
+{
+public:
+
+    FRootBisector_CBT() = default;
+    FRootBisector_CBT(int32 InBisectorID, int32 InTwin, int32 InNext, int32 InPrev, int32 InBisectorCommand, int32 InChild0, int32 InChild1, int32 InChild2, int32 InChild3)
+        : BisectorID(InBisectorID), Twin(InTwin), Next(InNext), Prev(InPrev), BisectorCommand(InBisectorCommand), Child0(InChild0), Child1(InChild1), Child2(InChild2), Child3(InChild3)
+    {
+    };
+    FRootBisector_CBT(int32 InBisectorID, int32 InTwin, int32 InNext, int32 InPrev)
+        : BisectorID(InBisectorID), Twin(InTwin), Next(InNext), Prev(InPrev), BisectorCommand(UNCHANGED_ELEMENT), Child0(INVALID_POINTER), Child1(INVALID_POINTER), Child2(INVALID_POINTER), Child3(INVALID_POINTER)
+    {
+    };
+
+    int32 BisectorID;
+    int32 Twin;
+    int32 Next;
+	int32 Prev;
+    int32 BisectorCommand; // Split / Merge / Unchanged, stored as bitfield or enum
+    int32 Child0;
+	int32 Child1;
+	int32 Child2;
+	int32 Child3;
+};
+
+// Pointer Buffer
+struct FPointer_CBT
+{
+    int32 IndexBuffer; // index buffer of bisectors located in the memory pool, Algorithm 7
+    int32 AvailabeBlock; // the index buffer of the available blocks in the memory pool, which we use for allocations. Algorithm 8
+
+};

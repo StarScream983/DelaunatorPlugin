@@ -27,13 +27,18 @@ public class DelaunatorPlugin : ModuleRules
         PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"Core",
+				"Core", 
+				"InputCore", 
+				"EnhancedInput",
 				// ... add other public dependencies that you statically link with here ...
-				"Large_CBT",
 				"SleefPlugin",
                 "SLEEF",
-				"ImGui"
-			}
+                "Large_CBT",
+                "ImGui",
+				"RenderCore",
+				"Renderer",
+				"RHI",
+            }
 			);
 			
 		
@@ -45,7 +50,8 @@ public class DelaunatorPlugin : ModuleRules
 				"Slate",
 				"SlateCore",
 				// ... add private dependencies that you statically link with here ...	
-				"Projects",
+				// "Large_CBT",
+                "Projects",
             }
 			);
 		

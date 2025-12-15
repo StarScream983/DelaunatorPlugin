@@ -11,6 +11,7 @@
 #include "CBTStructs.h"
 #include "GeoDelaunatorComponent.generated.h"
 
+class FCBTResource_Interface;
 
 #define _PI UE_DOUBLE_PI
 #define _TAU UE_DOUBLE_TWO_PI
@@ -238,9 +239,13 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	virtual void BeginDestroy() override; // better to release the CBTResources
+
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 protected:
+
+	// CUBEMAP SPATIAL BINNING
 
 	// PSEUDO-RNG
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain")
@@ -268,12 +273,12 @@ protected:
 	UDelaunator* Delaunator = nullptr;
 
 	TArray<FVector2D> LonLat;
-	TArray<FVector> FibonacciPoints;
+	TArray<FVector> FibonacciPoints; // BUFFER FOR TRIANGLES VERTICES
 	std::vector<double> coords; // FOR DELAUNAYTOR
 	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
-	TArray<int32> SphericalTrisFlat;
+	TArray<int32> SphericalTrisFlat; // TRIANGLES BUFFER
 	TArray<TArray<FReverseHE>> ReverseEdgesHash; // TRANSIENT - NOT TO BE SAVED - USED IN GEO_POLYGONS
-	TArray<int32> SphericalHalfEdges;
+	TArray<int32> SphericalHalfEdges; // BUFFER FOR FINDING TRIANGLES WITHOUT 
 
 
 	TArray<FVector2D> Projected2D; // FibonacciPoints after Stereographic Projection
@@ -286,15 +291,22 @@ protected:
 	FQuat PivotToSouthQuat = FQuat::Identity;
 
 	// VORONOI
+	TArray<int32> SitePrefixSums; // prefix sum (stack) of previous Voronoi polygon sizes
 	TArray<TArray<FVoronoiHalfEdge>> VoronoiHalfEdges_Map; // LookUp table for CBT half-edge buffer
 	TArray<TArray<int32>> VoronoiGeoMesh; // site index -> list of CCW triangle indices into Voronoi Sites (AKA VoronoiGeoCenters)
 	TArray<FVector> VoronoiGeoCenters; // CBT VERTEX BUFFER --- a copy of circumcenters, possibly with extra points appended — they are the same base data.But centers can grow later
-	TArray<FVector> VoronoiGeoCentroids; // CBT VERTEX BUFFER --- will probably be used as they are inside the triangles
 
 	// CBT STRUCTURE
 	uint32 D{ 16 }; // CBT Depth
-	TArray<int32> HalfEdge_Mesh;
 	TArray<FHalfEdge_CBT> HalfEdge_Buffer;
+	TArray<FRootBisector_CBT> RootBisectors_Buffer;
+	TArray<int32> CBT_Buffer;
+	/*int32 AllocationCounter_Buffer = 0;
+	TArray<FPointer_CBT> Pointer_Buffer;*/
+
+	TUniquePtr<FCBTResource_Interface> CBTResources;
+public:
+	FORCEINLINE float GetPlanetRadius() const { return (float)PlanetRadius; }
 
 public:
 	
@@ -304,9 +316,6 @@ public:
 	void StereographicProjection(TArray<FVector>& Points);	// NEEDS TO MERGE GEOROTATION
 	// DEPRECATED --- TO BE REMOVED LATER
 	FVector UnprojectVoronoiVertexToSphereAndInvertRotation(const FVector2d& V2D);
-
-	// FOR DEBUGGING UNUSED VERTICES
-	void CheckUnusedVertices();
 
 	 //GEO-DELAUNAY
 	void GeoDelauny();
@@ -325,9 +334,5 @@ public:
 	}
 
 	// CBT STRUCTURE
-
-private:
-	// IMGUI DEBUG
-	void ImGui_DebugHalfEdgeBuffer();
-	void ImGui_DebugVoronoiHalfEdgesMap();
+	// 100000 sites => 599988 half-edges
 };

@@ -2,6 +2,7 @@
 
 
 #include "GeoDelaunatorComponent.h"
+#include "CBTResource_Interface.h"
 #include <string>
 #include <iostream>
 #include "Interfaces/IPluginManager.h"
@@ -32,6 +33,22 @@ void UGeoDelaunatorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
+void UGeoDelaunatorComponent::BeginDestroy()
+{
+	if (CBTResources.IsValid())
+	{
+		if (CBTResources->IsInitialized())
+		{
+			BeginReleaseResource(CBTResources.Get());
+			FlushRenderingCommands();
+		}
+
+		CBTResources.Reset();
+	}
+
+	Super::BeginDestroy();
+}
+
 
 // Called every frame
 void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -52,7 +69,9 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 #pragma region PLANET_GENERAL_DATA_WINDOW
 	if (ImGui::Begin("Delaunay General Data Debug")) {
 		ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-		ImGui::Text("Halfedges: %d", HalfEdge_Buffer.Num());
+		ImGui::Text("Half_Edge Buffer: %d", HalfEdge_Buffer.Num());
+		ImGui::Text("Root Bisectors Buffer: %d", HalfEdge_Buffer.Num());
+		ImGui::Text("CBT Buffer: %d", CBT_Buffer.Num());
 		ImGui::Text("Voronoi Sites: %d", VoronoiGeoCenters.Num());
 		ImGui::Text("Triangles: %d", SphericalTriangles.Num());
 	}
@@ -181,7 +200,6 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 			if (ImGui::Button("PREV"))
 			{
 				CurrentHalfEdge = FMath::Clamp(CurrentHalfEdge - 1, 0, HalfEdge_Buffer.Num() - 1);
-				GEngine->AddOnScreenDebugMessage(-1, 1.5f, FColor::Cyan, TEXT("BACK"));
 			}
 
 			ImGui::SameLine();
@@ -189,7 +207,6 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 			if (ImGui::Button("NEXT"))
 			{
 				CurrentHalfEdge = FMath::Clamp(CurrentHalfEdge + 1, 0, HalfEdge_Buffer.Num() - 1);
-				GEngine->AddOnScreenDebugMessage(-1, 1.5f, FColor::Green, TEXT("NEXT"));
 			}
 
 			// --- Start two columns ---
@@ -624,31 +641,6 @@ FVector UGeoDelaunatorComponent::UnprojectVoronoiVertexToSphereAndInvertRotation
 		//return FVector(Xr, Yr, Zr); // return unrotated points
 }
 
-void UGeoDelaunatorComponent::CheckUnusedVertices()
-{
-	const int32 F = FibonacciPoints.Num();
-
-	TArray<int32> UsageCount;
-	UsageCount.Init(0, F);
-
-	for (const FIntVector& tri : SphericalTriangles)
-	{
-		UsageCount[tri.X]++;
-		UsageCount[tri.Y]++;
-		UsageCount[tri.Z]++;
-	}
-
-	UE_LOG(LogTemp, Warning, TEXT("Vertex %d is UNUSED (no triangles)"), UsageCount.Num());
-
-	for (int32 i = 0; i < F; ++i)
-	{
-		if (UsageCount[i] == 0)
-		{
-			UE_LOG(LogTemp, Error, TEXT("Vertex %d is UNUSED (no triangles)"), i);
-		}
-	}
-}
-
 void UGeoDelaunatorComponent::GeoDelauny()
 {
 	GeoDelaunayFrom();
@@ -818,14 +810,94 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 
 
 	// --- BUILD HALF-EDGE BUFFER FOR CBT ---
-	
+	HalfEdge_Buffer.Empty();
+	RootBisectors_Buffer.Empty();
+	for(int32 s=0; s < N; ++s)
+	{
+		const TArray<FVoronoiHalfEdge> PolyRing = VoronoiHalfEdges_Map[s];
+		const int32 RingSize = PolyRing.Num();
+		for (int32 v = 0; v < RingSize; ++v)
+		{
+			// create the CBT half-edge structure
+			FHalfEdge_CBT CBT_HE;
 
+			// Wrap Next and Prev with modulo
+			int32 LocalNext = (v + 1) % RingSize;
+			int32 LocalPrev = (v - 1 + RingSize) % RingSize;
 
-	//UE_LOG(LogTemp, Warning, TEXT("HE: %d"), HalfEdge_Mesh.Num());
+			CBT_HE.Next = SitePrefixSums[s] + LocalNext;
+			CBT_HE.Prev = SitePrefixSums[s] + LocalPrev;
+			CBT_HE.Vert = PolyRing[v].VHE_Start;
+			CBT_HE.Face = s;
+			CBT_HE.Edge = SitePrefixSums[s] + v;
 
-	// DEBUG
-	// GetWorld()->GetTimerManager().SetTimer(THandle_HalfEdgeDebug, this, &UGeoDelaunatorComponent::Timer_HalfEdgeDebug, 1.f/2.f, true, 3.f);
-	// CheckUnusedVertices();
+			// get end_face
+			const TArray<FVoronoiHalfEdge> Twin_Poly = VoronoiHalfEdges_Map[PolyRing[v].End_Face];
+			// loop through VoronoiHalfEdges_Map[end_face] to find VHE where its end_face == s
+			for (int32 t_v = 0; t_v < Twin_Poly.Num(); ++t_v)
+			{
+				// get SitePrefixSums[end_face] and add VHE_v to calcualte twin global index in CBT HE array
+				if(Twin_Poly[t_v].End_Face == s)
+				{
+					// found the twin half-edge
+					CBT_HE.Twin = SitePrefixSums[PolyRing[v].End_Face] + t_v;
+					break;
+				}
+			}
+
+			// add the CBT half-edges to the array
+			HalfEdge_Buffer.Add(CBT_HE);
+
+			// Build Root Bisectors Buffer
+			RootBisectors_Buffer.Add(FRootBisector_CBT(CBT_HE.Edge, CBT_HE.Twin, CBT_HE.Next, CBT_HE.Prev));
+		}
+	}
+
+	// CALCULATING DEPTH AND BUILDING THE CBT BUFFER
+	const int32 NumRootBisectors = HalfEdge_Buffer.Num();
+	// ----------------------------------------------------
+	// 1) Choose a safe Depth based on number of bisectors
+	// ----------------------------------------------------
+	// We want 2^Depth >= NumRootBisectors, with some margin.
+	float Log2N = FMath::Log2((float)NumRootBisectors);
+	int32 Depth = FMath::CeilToInt(Log2N);
+
+	// Add 1 level of safety (you can add 2 if you want more headroom)
+	D = Depth;
+
+	// Optional: clamp to something sane (avoid 1<<31 overflow)
+	D = FMath::Clamp(Depth, 1, 24);   // 2^(24+1) = 33 million leaves
+
+	// CBT bitfield layout (0-based):
+	// internal nodes: 0 .. NumLeaves-1
+	// leaves        : NumLeaves .. 2*NumLeaves-1
+	const int32 NumLeaves = 1 << D;             // 2^D
+
+	CBT_Buffer.Empty();
+	CBT_Buffer.SetNumZeroed(2 * NumLeaves);           // all bits = 0
+
+	// Set the first H leaves (root bisectors) to 1, and calculating the sum reduction tree
+	for (int32 h = 0; h < NumLeaves; ++h)
+	{
+		if (CBT_Buffer.IsValidIndex(NumLeaves + h)) 
+		{
+			if (h < NumRootBisectors)CBT_Buffer[NumLeaves + h] = 1;
+		}
+		const int32 Reverse_h = NumLeaves - 1 - h;
+		const int32 Reverse_Double_h = 2 * Reverse_h; // 2k node index => child of k node index
+		const int32 Node_2k = (Reverse_Double_h >= NumLeaves) ? ((Reverse_Double_h >= NumLeaves + NumRootBisectors) ? 1 : 0) : CBT_Buffer[Reverse_Double_h]; // 2k child node value
+		const int32 Node_2kplus1 = (Reverse_Double_h + 1 >= NumLeaves) ? ((Reverse_Double_h+1 >= NumLeaves + NumRootBisectors) ? 1 : 0) : CBT_Buffer[Reverse_Double_h + 1]; // 2k+1 child node value
+		CBT_Buffer[Reverse_h] =  Node_2k + Node_2kplus1;
+
+		//if (Node_2k + Node_2kplus1>0) UE_LOG(LogTemp, Warning, TEXT("SUM ID: %d || SUM: %d"), Reverse_h, Node_2k + Node_2kplus1); // LOG INDICES WHICH SUM IS HIGHER THAN 0
+	}
+
+	if (!CBTResources.IsValid())
+	{
+		CBTResources = MakeUnique<FCBTResource_Interface>();
+	}
+	CBTResources->PrimeTrianglesBuffers(FibonacciPoints, SphericalTrisFlat, SphericalHalfEdges);
+	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters, RootBisectors_Buffer, CBT_Buffer);
 
 	//*******************************************************************
 	//TEST for lambda function capture of inner parameters with [=, this]
@@ -929,6 +1001,9 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 
 	VoronoiHalfEdges_Map.Empty();
 	VoronoiHalfEdges_Map.SetNum(NumSites);
+	SitePrefixSums.Empty();
+	SitePrefixSums.SetNum(NumSites);
+	SitePrefixSums[0] = 0;
 
 	// --- STEP 2: Reorder each polygon CCW using neighbors ---
 	for (int32 s = 0; s < NumSites; ++s)
@@ -972,6 +1047,7 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 			}
 		}
 
+		// CLOSE THE HALF-EDGE RING FOR THE CURRENT SITE --- NOT FIL's CODE
 		if (OrderedTris.Num() >= 2)
 		{
 			int32 Last = _VHE_Start;            // Last triangle index added
@@ -980,6 +1056,9 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 
 			VoronoiHalfEdges_Map[s].Add(FVoronoiHalfEdge(Last, First, _Start_Face, EndFace));
 		}
+		// BUILD PREFIX SUMS FOR VORONOI HALF-EDGE ACCESS ---
+		if (s > 0) SitePrefixSums[s] = SitePrefixSums[s - 1] + VoronoiHalfEdges_Map[s].Num();
+
 
 		// --- STEP 3: Check if only two triangles (degenerate case) ---
 		if (OrderedTris.Num() == 2)

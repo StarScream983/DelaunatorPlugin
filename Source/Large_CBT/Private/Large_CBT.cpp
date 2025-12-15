@@ -14,7 +14,7 @@ void FLarge_CBTModule::StartupModule()
             TEXT("Shaders/Private"));
 
     // Map /MyShaders to your plugin's Shaders folder
-    AddShaderSourceDirectoryMapping(TEXT("/DelaunatorPlugin"), PluginShaderDir);
+    AddShaderSourceDirectoryMapping(TEXT("/DelaunatorShaders"), PluginShaderDir);
 
     /*UE_LOG(LogTemp, Warning, TEXT("ShaderDir mapped: %s"), *PluginShaderDir);
     checkf(FPaths::FileExists(PluginShaderDir / TEXT("RaymarchPS.usf")),

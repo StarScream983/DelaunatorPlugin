@@ -1,0 +1,12 @@
+#include "/Engine/Generated/Material.ush"
+#include "/Engine/Public/Platform.ush"
+
+struct FHalfEdge_CBT
+{
+    int Vert;
+    int Face;
+    int Next;
+    int Prev;
+    int Twin;
+    int Edge;
+};
