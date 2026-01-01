@@ -23,6 +23,11 @@ public class DelaunatorPlugin : ModuleRules
 
         // Tell the compiler we want to import the ImPlot symbols when linking against ImGui plugin 
         PrivateDefinitions.Add(string.Format("IMPLOT_API=DLLIMPORT"));
+        PublicDefinitions.Add("UE_ENABLE_ICU=1");
+
+        bEnableExceptions = true;
+        bUseRTTI = true;
+        CppStandard = CppStandardVersion.Cpp20;
 
         PublicDependencyModuleNames.AddRange(
 			new string[]

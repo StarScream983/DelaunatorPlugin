@@ -5,13 +5,13 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Delaunator.h"
+#include "CBTResource_Interface.h"
 #include <sleef.h>
 #include <functional>
 #include <array>
 #include "CBTStructs.h"
 #include "GeoDelaunatorComponent.generated.h"
 
-class FCBTResource_Interface;
 
 #define _PI UE_DOUBLE_PI
 #define _TAU UE_DOUBLE_TWO_PI
@@ -278,7 +278,8 @@ protected:
 	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
 	TArray<int32> SphericalTrisFlat; // TRIANGLES BUFFER
 	TArray<TArray<FReverseHE>> ReverseEdgesHash; // TRANSIENT - NOT TO BE SAVED - USED IN GEO_POLYGONS
-	TArray<int32> SphericalHalfEdges; // BUFFER FOR FINDING TRIANGLES WITHOUT 
+	TArray<int32> SphericalHalfEdges; // BUFFER FOR FINDING TRIANGLES WITHOUT
+	TArray<FTriangleDescriptor> VoronoiTriangleDescriptors; // BUFFER FOR BASE VORONOI SITES TRIANGLE MESH RENDERING
 
 
 	TArray<FVector2D> Projected2D; // FibonacciPoints after Stereographic Projection

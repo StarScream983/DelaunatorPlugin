@@ -75,3 +75,11 @@ struct FPointer_CBT
     int32 AvailabeBlock; // the index buffer of the available blocks in the memory pool, which we use for allocations. Algorithm 8
 
 };
+
+// Triangle Descriptor for Indirect instancing and Vertex Factory, guaranteed 16-byte alignment
+struct FTriangleDescriptor
+{
+    FVector4 VertA;
+    FVector4 VertB;
+    FVector4 VertC;
+};

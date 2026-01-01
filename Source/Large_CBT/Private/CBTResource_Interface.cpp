@@ -5,15 +5,17 @@
 #include "RenderCore.h"
 #include "RHI.h"
 
-void FCBTResource_Interface::PrimeTrianglesBuffers(const TArray<FVector>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges)
+void FCBTResource_Interface::PrimeTrianglesBuffers(const TArray<FVector>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges, const TArray<FTriangleDescriptor>& InTriangleDescriptors)
 {
     CPU_FibonacciPoints_Buffer.Empty();
     CPU_SphericalTriangles_Buffer.Empty();
     CPU_SphericalTriangles_HalfEdges_Buffer.Empty();
+    CPU_VoronoiTriangleDescriptors_Buffer.Empty();
 
     CPU_FibonacciPoints_Buffer = InFibonacciPoints;
     CPU_SphericalTriangles_Buffer = InSphericalTriangles;
     CPU_SphericalTriangles_HalfEdges_Buffer = InSphericalTrianglesHalfEdges;
+	CPU_VoronoiTriangleDescriptors_Buffer = InTriangleDescriptors;
 }
 
 void FCBTResource_Interface::InitFromCPU(const int32 InD, const TArray<FHalfEdge_CBT>& InHalfEdges, const TArray<FVector>& InVertexBuffer, const TArray<FRootBisector_CBT>& InRootBisectors, const TArray<int32>& InCBTBuffer)
@@ -87,6 +89,21 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
             ERHIAccess::SRVMask                    // Initial state
         );
         UploadSphericalTrianglesHalfEdgesBufferToGPU();
+    }
+
+    if (CPU_VoronoiTriangleDescriptors_Buffer.Num() > 0)
+    {
+        VoronoiTriangleDesctiptors_Buffer.Initialize(
+            RHICmdList,
+            TEXT("VertexFactory_VoronoiTriangleDescriptors_Buffer"),     // Debug name
+            sizeof(FTriangleDescriptor),                                  // BytesPerElement
+            (uint32)CPU_VoronoiTriangleDescriptors_Buffer.Num(),    // NumElements
+            BUF_ShaderResource,                             // Usage flags
+            /*bUseUAVCounter=*/false,
+            /*bAppendBuffer=*/false,
+            ERHIAccess::SRVMask                    // Initial state
+        );
+        UploadVoronoiTriangleDescriptorsToGPU();
     }
     
     // UPLOAD CBT BUFFERS
@@ -218,14 +235,32 @@ void FCBTResource_Interface::UploadSphericalTrianglesHalfEdgesBufferToGPU()
 {
 }
 
+void FCBTResource_Interface::UploadVoronoiTriangleDescriptorsToGPU()
+{
+    if (!VoronoiTriangleDesctiptors_Buffer.Buffer || CPU_VoronoiTriangleDescriptors_Buffer.Num() == 0)
+        return;
+
+    const uint32 NumBytes = CPU_VoronoiTriangleDescriptors_Buffer.Num() * sizeof(FTriangleDescriptor);
+    FRHICommandListImmediate& RHICmdList = GRHICommandList.GetImmediateCommandList();
+    void* Dest = RHICmdList.LockBuffer(
+        VoronoiTriangleDesctiptors_Buffer.Buffer, // FRHIBuffer*
+        0,                       // Offset
+        NumBytes,                // Size
+        RLM_WriteOnly            // Lock mode
+    );
+
+    FMemory::Memcpy(Dest, CPU_VoronoiTriangleDescriptors_Buffer.GetData(), NumBytes);
+    RHICmdList.UnlockBuffer(VoronoiTriangleDesctiptors_Buffer.Buffer);
+}
+
 void FCBTResource_Interface::UploadHalfEdgesToGPU()
 {
     if (!HalfEdges_Buffer.Buffer || CPUHalfEdge_Buffer.Num() == 0)
         return;
 
     const uint32 NumBytes = CPUHalfEdge_Buffer.Num() * sizeof(FHalfEdge_CBT);
-
-    void* Dest = RHILockBuffer(
+    FRHICommandListImmediate& RHICmdList = GRHICommandList.GetImmediateCommandList();
+    void* Dest = RHICmdList.LockBuffer(
         HalfEdges_Buffer.Buffer, // FRHIBuffer*
         0,                       // Offset
         NumBytes,                // Size
@@ -233,7 +268,7 @@ void FCBTResource_Interface::UploadHalfEdgesToGPU()
     );
 
     FMemory::Memcpy(Dest, CPUHalfEdge_Buffer.GetData(), NumBytes);
-    RHIUnlockBuffer(HalfEdges_Buffer.Buffer);
+    RHICmdList.UnlockBuffer(HalfEdges_Buffer.Buffer);
 }
 
 void FCBTResource_Interface::UploadVertexBufferToGPU()
@@ -242,8 +277,8 @@ void FCBTResource_Interface::UploadVertexBufferToGPU()
         return;
 
     const uint32 NumBytes = CPUVertex_Buffer.Num() * sizeof(FHalfEdge_CBT);
-
-    void* Dest = RHILockBuffer(
+    FRHICommandListImmediate& RHICmdList = GRHICommandList.GetImmediateCommandList();
+    void* Dest = RHICmdList.LockBuffer(
         Vertex_Buffer.Buffer, // FRHIBuffer*
         0,                       // Offset
         NumBytes,                // Size
@@ -251,7 +286,7 @@ void FCBTResource_Interface::UploadVertexBufferToGPU()
     );
 
     FMemory::Memcpy(Dest, CPUVertex_Buffer.GetData(), NumBytes);
-    RHIUnlockBuffer(Vertex_Buffer.Buffer);
+    RHICmdList.UnlockBuffer(Vertex_Buffer.Buffer);
 }
 
 void FCBTResource_Interface::UploadRootBisectorsToGPU()
@@ -260,8 +295,8 @@ void FCBTResource_Interface::UploadRootBisectorsToGPU()
         return;
 
     const uint32 NumBytes = CPURootBisectors_Buffer.Num() * sizeof(FHalfEdge_CBT);
-
-    void* Dest = RHILockBuffer(
+    FRHICommandListImmediate& RHICmdList = GRHICommandList.GetImmediateCommandList();
+    void* Dest = RHICmdList.LockBuffer(
         RootBisectors_Buffer.Buffer, // FRHIBuffer*
         0,                       // Offset
         NumBytes,                // Size
@@ -269,7 +304,7 @@ void FCBTResource_Interface::UploadRootBisectorsToGPU()
     );
 
     FMemory::Memcpy(Dest, CPURootBisectors_Buffer.GetData(), NumBytes);
-    RHIUnlockBuffer(RootBisectors_Buffer.Buffer);
+    RHICmdList.UnlockBuffer(RootBisectors_Buffer.Buffer);
 }
 
 void FCBTResource_Interface::UploadCBTToGPU()
@@ -278,8 +313,8 @@ void FCBTResource_Interface::UploadCBTToGPU()
         return;
 
     const uint32 NumBytes = CPUCBT_Buffer.Num() * sizeof(int32);
-
-    void* Dest = RHILockBuffer(
+    FRHICommandListImmediate& RHICmdList = GRHICommandList.GetImmediateCommandList();
+    void* Dest = RHICmdList.LockBuffer(
         CBT_Buffer.Buffer, // FRHIBuffer*
         0,                       // Offset
         NumBytes,                // Size
@@ -287,14 +322,14 @@ void FCBTResource_Interface::UploadCBTToGPU()
     );
 
     FMemory::Memcpy(Dest, CPUCBT_Buffer.GetData(), NumBytes);
-    RHIUnlockBuffer(CBT_Buffer.Buffer);
+    RHICmdList.UnlockBuffer(CBT_Buffer.Buffer);
 }
 
 void FCBTResource_Interface::UploadAllocationCounterToGPU()
 {
     const uint32 NumBytes = 1 * sizeof(int32);
-
-    void* Dest = RHILockBuffer(
+    FRHICommandListImmediate& RHICmdList = GRHICommandList.GetImmediateCommandList();
+    void* Dest = RHICmdList.LockBuffer(
         AllocationCounter_Buffer.Buffer, // FRHIBuffer*
         0,                       // Offset
         NumBytes,                // Size
@@ -302,7 +337,7 @@ void FCBTResource_Interface::UploadAllocationCounterToGPU()
     );
 
     FMemory::Memcpy(Dest, &CPUAllocationCounter, NumBytes);
-    RHIUnlockBuffer(AllocationCounter_Buffer.Buffer);
+    RHICmdList.UnlockBuffer(AllocationCounter_Buffer.Buffer);
 }
 
 void FCBTResource_Interface::UploadPointerBufferToGPU()
@@ -311,8 +346,8 @@ void FCBTResource_Interface::UploadPointerBufferToGPU()
         return;
 
     const uint32 NumBytes = CPUPointer_Buffer.Num() * sizeof(FPointer_CBT);
-
-    void* Dest = RHILockBuffer(
+    FRHICommandListImmediate& RHICmdList = GRHICommandList.GetImmediateCommandList();
+    void* Dest = RHICmdList.LockBuffer(
         Pointer_Buffer.Buffer, // FRHIBuffer*
         0,                       // Offset
         NumBytes,                // Size
@@ -320,5 +355,5 @@ void FCBTResource_Interface::UploadPointerBufferToGPU()
     );
 
     FMemory::Memcpy(Dest, CPUPointer_Buffer.GetData(), NumBytes);
-    RHIUnlockBuffer(Pointer_Buffer.Buffer);
+    RHICmdList.UnlockBuffer(Pointer_Buffer.Buffer);
 }

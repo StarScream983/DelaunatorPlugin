@@ -22,6 +22,7 @@ private:
 	TArray<FVector> CPU_FibonacciPoints_Buffer;
 	TArray<int32> CPU_SphericalTriangles_Buffer; // flat array
 	TArray<int32> CPU_SphericalTriangles_HalfEdges_Buffer;
+	TArray<FTriangleDescriptor> CPU_VoronoiTriangleDescriptors_Buffer;
 
 	// CPU CBT BUFFERS
 	int32 D{ 0 };
@@ -36,6 +37,7 @@ private:
 	FRWBufferStructured FibonacciPoints_Buffer;
 	FRWBufferStructured SphericalTriangles_Buffer;
 	FRWBufferStructured SphericalTriangles_HalfEdges_Buffer;
+	FRWBufferStructured VoronoiTriangleDesctiptors_Buffer;
 
 	// GPU CBT buffers
 	FRWBufferStructured HalfEdges_Buffer;     // StructuredBuffer<FHalfEdge_CBT>
@@ -48,7 +50,7 @@ private:
 public:
 
 	// Prime Triangle CPU Buffers
-	void PrimeTrianglesBuffers(const TArray<FVector>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges);
+	void PrimeTrianglesBuffers(const TArray<FVector>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges, const TArray<FTriangleDescriptor>& InTriangleDescriptors);
 	// Init from CPU arrays (call from game thread)
 	void InitFromCPU(const int32 InD,
 		const TArray<FHalfEdge_CBT>& InHalfEdges,
@@ -64,6 +66,7 @@ private:
 	void UploadFibonacciPointsToGPU();
 	void UploadSphericalTrianglesToGPU();
 	void UploadSphericalTrianglesHalfEdgesBufferToGPU();
+	void UploadVoronoiTriangleDescriptorsToGPU();
 
 	void UploadHalfEdgesToGPU();
 	void UploadVertexBufferToGPU();

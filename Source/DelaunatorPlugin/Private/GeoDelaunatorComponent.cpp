@@ -2,7 +2,6 @@
 
 
 #include "GeoDelaunatorComponent.h"
-#include "CBTResource_Interface.h"
 #include <string>
 #include <iostream>
 #include "Interfaces/IPluginManager.h"
@@ -60,10 +59,10 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	UWorld* WorldActual = GetWorld();
 	if (!WorldActual) return;
 
-	static bool bShowVoronoiVerts = true;
-	static bool bShowVoronoiEdges = true;
-	static bool bShowDelaunaySites = true;
-	static bool bShowDelaunayEdges = true;
+	static bool bShowVoronoiVerts = false;
+	static bool bShowVoronoiEdges = false;
+	static bool bShowDelaunaySites = false;
+	static bool bShowDelaunayEdges = false;
 #ifdef IMGUI_API
 
 #pragma region PLANET_GENERAL_DATA_WINDOW
@@ -812,6 +811,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	// --- BUILD HALF-EDGE BUFFER FOR CBT ---
 	HalfEdge_Buffer.Empty();
 	RootBisectors_Buffer.Empty();
+	VoronoiTriangleDescriptors.Empty();
 	for(int32 s=0; s < N; ++s)
 	{
 		const TArray<FVoronoiHalfEdge> PolyRing = VoronoiHalfEdges_Map[s];
@@ -850,6 +850,13 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 
 			// Build Root Bisectors Buffer
 			RootBisectors_Buffer.Add(FRootBisector_CBT(CBT_HE.Edge, CBT_HE.Twin, CBT_HE.Next, CBT_HE.Prev));
+
+			// Build the Triangles for each voronoi site
+			const FVector4 V_A = FVector4(s, 0.0) * PlanetRadius;
+			const FVector4 V_B = FVector4(Circumcenters[PolyRing[v].VHE_Start], 0.) * PlanetRadius;
+			const FVector4 V_C = FVector4(Circumcenters[PolyRing[v].VHE_End], 0.) * PlanetRadius;
+
+			VoronoiTriangleDescriptors.Add(FTriangleDescriptor(V_A, V_B, V_C));
 		}
 	}
 
@@ -884,7 +891,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 			if (h < NumRootBisectors)CBT_Buffer[NumLeaves + h] = 1;
 		}
 		const int32 Reverse_h = NumLeaves - 1 - h;
-		const int32 Reverse_Double_h = 2 * Reverse_h; // 2k node index => child of k node index
+		const int32 Reverse_Double_h = (2 * Reverse_h)+1; // 2k+1 node index => child of k node index
 		const int32 Node_2k = (Reverse_Double_h >= NumLeaves) ? ((Reverse_Double_h >= NumLeaves + NumRootBisectors) ? 1 : 0) : CBT_Buffer[Reverse_Double_h]; // 2k child node value
 		const int32 Node_2kplus1 = (Reverse_Double_h + 1 >= NumLeaves) ? ((Reverse_Double_h+1 >= NumLeaves + NumRootBisectors) ? 1 : 0) : CBT_Buffer[Reverse_Double_h + 1]; // 2k+1 child node value
 		CBT_Buffer[Reverse_h] =  Node_2k + Node_2kplus1;
@@ -896,7 +903,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	{
 		CBTResources = MakeUnique<FCBTResource_Interface>();
 	}
-	CBTResources->PrimeTrianglesBuffers(FibonacciPoints, SphericalTrisFlat, SphericalHalfEdges);
+	CBTResources->PrimeTrianglesBuffers(FibonacciPoints, SphericalTrisFlat, SphericalHalfEdges, VoronoiTriangleDescriptors);
 	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters, RootBisectors_Buffer, CBT_Buffer);
 
 	//*******************************************************************

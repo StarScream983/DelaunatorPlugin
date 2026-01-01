@@ -4,7 +4,13 @@
 
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
+#include <stdexcept>
+#include <vector>
+#include <array>
+#include <algorithm>
 #include <limits>
+#include <cmath>
+#include <cstdint>
 #include "Delaunator.generated.h"
 
 /**

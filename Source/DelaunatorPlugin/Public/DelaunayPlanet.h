@@ -4,6 +4,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include <stdexcept>
+#include <vector>
+#include <array>
+#include <algorithm>
+#include <limits>
+#include <cmath>
+#include <cstdint>
 #include "DelaunayPlanet.generated.h"
 
 class UGeoDelaunatorComponent;
