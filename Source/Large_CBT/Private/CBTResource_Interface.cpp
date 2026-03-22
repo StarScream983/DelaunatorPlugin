@@ -5,7 +5,7 @@
 #include "RenderCore.h"
 #include "RHI.h"
 
-void FCBTResource_Interface::PrimeTrianglesBuffers(const TArray<FVector>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges)
+void FCBTResource_Interface::PrimeTrianglesBuffers(const TArray<FVector3_HighLow>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges)
 {
     CPU_FibonacciPoints_Buffer.Empty();
     CPU_SphericalTriangles_Buffer.Empty();
@@ -16,7 +16,7 @@ void FCBTResource_Interface::PrimeTrianglesBuffers(const TArray<FVector>& InFibo
     CPU_SphericalTriangles_HalfEdges_Buffer = InSphericalTrianglesHalfEdges;
 }
 
-void FCBTResource_Interface::InitFromCPU(const int32 InD, const TArray<FHalfEdge_CBT>& InHalfEdges, const TArray<FVector>& InVertexBuffer, const TArray<FRootBisector_CBT>& InRootBisectors, const TArray<int32>& InCBTBuffer)
+void FCBTResource_Interface::InitFromCPU(const int32 InD, const TArray<FHalfEdge_CBT>& InHalfEdges, const TArray<FVector3_HighLow>& InVertexBuffer, const TArray<FRootBisector_CBT>& InRootBisectors, const TArray<int32>& InCBTBuffer)
 {
 
     CPUHalfEdge_Buffer.Empty();
@@ -49,7 +49,7 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
         FibonacciPoints_Buffer.Initialize(
             RHICmdList,
             TEXT("LargeCBT_FibonacciPoints_Buffer"),     // Debug name
-            sizeof(FVector),                 // BytesPerElement
+            sizeof(FVector3_HighLow),                 // BytesPerElement
             (uint32)CPU_FibonacciPoints_Buffer.Num(),      // NumElements
             BUF_ShaderResource,                    // Usage flags
             /*bUseUAVCounter=*/false,
@@ -110,7 +110,7 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
         Vertex_Buffer.Initialize(
             RHICmdList,
             TEXT("LargeCBT_Vertex_Buffer"),     // Debug name
-            sizeof(FVector),                 // BytesPerElement
+            sizeof(FVector3_HighLow),                 // BytesPerElement
             (uint32)CPUVertex_Buffer.Num(),      // NumElements
             BUF_ShaderResource | BUF_UnorderedAccess,                    // Usage flags
             /*bUseUAVCounter=*/false,
@@ -208,14 +208,65 @@ void FCBTResource_Interface::ReleaseRHI()
 
 void FCBTResource_Interface::UploadFibonacciPointsToGPU()
 {
+    if (!FibonacciPoints_Buffer.Buffer || CPU_FibonacciPoints_Buffer.Num() == 0)
+        return;
+
+    const uint32 NumBytes = CPU_FibonacciPoints_Buffer.Num() * sizeof(FVector3_HighLow);
+
+    void* Dest = RHILockBuffer(
+        FibonacciPoints_Buffer.Buffer,  // FRHIBuffer*
+        0,                              // Offset
+        NumBytes,                       // Size
+        RLM_WriteOnly                   // Lock mode
+    );
+
+    FMemory::Memcpy(Dest, CPU_FibonacciPoints_Buffer.GetData(), NumBytes);
+    RHIUnlockBuffer(FibonacciPoints_Buffer.Buffer);
+
+    UE_LOG(LogTemp, Warning, TEXT("Uploaded %d Fibonacci points (%.2f MB) to GPU"),
+        CPU_FibonacciPoints_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));
 }
 
 void FCBTResource_Interface::UploadSphericalTrianglesToGPU()
 {
+    if (!SphericalTriangles_Buffer.Buffer || CPU_SphericalTriangles_Buffer.Num() == 0)
+        return;
+
+    const uint32 NumBytes = CPU_SphericalTriangles_Buffer.Num() * sizeof(int32);
+
+    void* Dest = RHILockBuffer(
+        SphericalTriangles_Buffer.Buffer,  // FRHIBuffer*
+        0,                                 // Offset
+        NumBytes,                          // Size
+        RLM_WriteOnly                      // Lock mode
+    );
+
+    FMemory::Memcpy(Dest, CPU_SphericalTriangles_Buffer.GetData(), NumBytes);
+    RHIUnlockBuffer(SphericalTriangles_Buffer.Buffer);
+
+    UE_LOG(LogTemp, Warning, TEXT("Uploaded %d spherical triangle indices (%.2f MB) to GPU"),
+        CPU_SphericalTriangles_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));
 }
 
 void FCBTResource_Interface::UploadSphericalTrianglesHalfEdgesBufferToGPU()
 {
+    if (!SphericalTriangles_HalfEdges_Buffer.Buffer || CPU_SphericalTriangles_HalfEdges_Buffer.Num() == 0)
+        return;
+
+    const uint32 NumBytes = CPU_SphericalTriangles_HalfEdges_Buffer.Num() * sizeof(int32);
+
+    void* Dest = RHILockBuffer(
+        SphericalTriangles_HalfEdges_Buffer.Buffer,  // FRHIBuffer*
+        0,                                           // Offset
+        NumBytes,                                    // Size
+        RLM_WriteOnly                                // Lock mode
+    );
+
+    FMemory::Memcpy(Dest, CPU_SphericalTriangles_HalfEdges_Buffer.GetData(), NumBytes);
+    RHIUnlockBuffer(SphericalTriangles_HalfEdges_Buffer.Buffer);
+
+    UE_LOG(LogTemp, Warning, TEXT("Uploaded %d half-edge indices (%.2f MB) to GPU"),
+        CPU_SphericalTriangles_HalfEdges_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));
 }
 
 void FCBTResource_Interface::UploadHalfEdgesToGPU()
@@ -241,7 +292,7 @@ void FCBTResource_Interface::UploadVertexBufferToGPU()
     if (!Vertex_Buffer.Buffer || CPUVertex_Buffer.Num() == 0)
         return;
 
-    const uint32 NumBytes = CPUVertex_Buffer.Num() * sizeof(FHalfEdge_CBT);
+    const uint32 NumBytes = CPUVertex_Buffer.Num() * sizeof(FVector3_HighLow);
 
     void* Dest = RHILockBuffer(
         Vertex_Buffer.Buffer, // FRHIBuffer*
@@ -259,7 +310,7 @@ void FCBTResource_Interface::UploadRootBisectorsToGPU()
     if (!RootBisectors_Buffer.Buffer || CPURootBisectors_Buffer.Num() == 0)
         return;
 
-    const uint32 NumBytes = CPURootBisectors_Buffer.Num() * sizeof(FHalfEdge_CBT);
+    const uint32 NumBytes = CPURootBisectors_Buffer.Num() * sizeof(FRootBisector_CBT);
 
     void* Dest = RHILockBuffer(
         RootBisectors_Buffer.Buffer, // FRHIBuffer*

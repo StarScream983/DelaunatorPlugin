@@ -209,6 +209,7 @@ public:
 struct FGeoPolygonResult {
 	TArray<TArray<int32>> Polygons; // site index -> list of CCW triangle indices (into Circumcenters)
 	TArray<FVector3d> Centers; // final augmented circumcenters
+	TArray<FVector3_HighLow> Centers_HL; // final augmented circumcenters_HL for GPU
 };
 
 // STRUCT TO HOLD REVERSE HALF-EDGE MAPPING
@@ -274,6 +275,7 @@ protected:
 
 	TArray<FVector2D> LonLat;
 	TArray<FVector> FibonacciPoints; // BUFFER FOR TRIANGLES VERTICES
+	TArray<FVector3_HighLow> FibonacciPoints_HL; // HIGH-LOW BUFFER FOR GPU TRIANGLE VERTICES
 	std::vector<double> coords; // FOR DELAUNAYTOR
 	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
 	TArray<int32> SphericalTrisFlat; // TRIANGLES BUFFER
@@ -295,6 +297,7 @@ protected:
 	TArray<TArray<FVoronoiHalfEdge>> VoronoiHalfEdges_Map; // LookUp table for CBT half-edge buffer
 	TArray<TArray<int32>> VoronoiGeoMesh; // site index -> list of CCW triangle indices into Voronoi Sites (AKA VoronoiGeoCenters)
 	TArray<FVector> VoronoiGeoCenters; // CBT VERTEX BUFFER --- a copy of circumcenters, possibly with extra points appended — they are the same base data.But centers can grow later
+	TArray<FVector3_HighLow> VoronoiGeoCenters_HL; // HIGH-LOW BUFFER FOR GPU VORONOI GEO CENTERS
 
 	// CBT STRUCTURE
 	uint32 D{ 16 }; // CBT Depth
@@ -322,9 +325,9 @@ public:
 	void GeoDelaunayFrom();
 
 	// VORONOI
-	void Geo_Circumcenters(TArray<FVector>& Circumcenters);
-	void Geo_Centroids(TArray<FVector>& Circumcenters);
-	FGeoPolygonResult Geo_Polygons(TArray<FVector>& Circumcenters);
+	void Geo_Circumcenters(TArray<FVector>& Circumcenters, TArray<FVector3_HighLow>& Circumcenters_HL);
+	void Geo_Centroids(TArray<FVector>& Circumcenters, TArray<FVector3_HighLow>& Circumcenters_HL);
+	FGeoPolygonResult Geo_Polygons(TArray<FVector>& Circumcenters, TArray<FVector3_HighLow>& Circumcenters_HL);
 	// Optional midpoint helper
 	FORCEINLINE FVector3d SphericalMidpoint(const FVector3d& A, const FVector3d& B, const FVector3d& RefCenter)
 	{

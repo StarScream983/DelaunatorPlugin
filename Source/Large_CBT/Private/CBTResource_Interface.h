@@ -19,14 +19,14 @@ public:
 private:
 
 	// CPU TRIANGLES BUFFERS
-	TArray<FVector> CPU_FibonacciPoints_Buffer;
+	TArray<FVector3_HighLow> CPU_FibonacciPoints_Buffer;
 	TArray<int32> CPU_SphericalTriangles_Buffer; // flat array
 	TArray<int32> CPU_SphericalTriangles_HalfEdges_Buffer;
 
 	// CPU CBT BUFFERS
 	int32 D{ 0 };
 	TArray<FHalfEdge_CBT> CPUHalfEdge_Buffer;
-	TArray<FVector> CPUVertex_Buffer;
+	TArray<FVector3_HighLow> CPUVertex_Buffer;
 	TArray<FRootBisector_CBT> CPURootBisectors_Buffer;
 	TArray<int32> CPUCBT_Buffer;
 	int32 CPUAllocationCounter = -1;
@@ -48,11 +48,11 @@ private:
 public:
 
 	// Prime Triangle CPU Buffers
-	void PrimeTrianglesBuffers(const TArray<FVector>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges);
+	void PrimeTrianglesBuffers(const TArray<FVector3_HighLow>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges);
 	// Init from CPU arrays (call from game thread)
 	void InitFromCPU(const int32 InD,
 		const TArray<FHalfEdge_CBT>& InHalfEdges,
-		const TArray<FVector>& InVertexBuffer,
+		const TArray<FVector3_HighLow>& InVertexBuffer,
 		const TArray<FRootBisector_CBT>& InRootBisectors,
 		const TArray<int32>& InCBTBuffer);
 

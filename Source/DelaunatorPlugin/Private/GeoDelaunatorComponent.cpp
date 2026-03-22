@@ -437,6 +437,8 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 
 	FibonacciPoints.Empty();
 	FibonacciPoints.Reserve(N);
+	FibonacciPoints_HL.Empty();
+	FibonacciPoints_HL.Reserve(N);
 	LonLat.Empty();
 	LonLat.Reserve(N);
 
@@ -490,7 +492,9 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 		const double y = cosLat * Sleef_sin_u10(lng);
 		const double zCart = sinLat;                 // Z is latitude
 
-		FibonacciPoints.Add(FVector(x, y, zCart));
+		const FVector FibPoint(x, y, zCart);
+		FibonacciPoints.Add(FibPoint);
+		FibonacciPoints_HL.Add(FVector3_HighLow(FibPoint));
 
 		// RedBlob increment
 		const double safeR2 = (r > 1e-12) ? r : 1e-12;
@@ -505,6 +509,8 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere2()
 
 	FibonacciPoints.Empty();
 	FibonacciPoints.Reserve(N);
+	FibonacciPoints_HL.Empty();
+	FibonacciPoints_HL.Reserve(N);
 	LonLat.Empty();
 	LonLat.Reserve(N); // pre-allocates memory for N elements up front.
 	const double s = 3.6 / Sleef_sqrt_u05((double)N);
@@ -557,7 +563,9 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere2()
 		const double y = cosLat * Sleef_sin_u10(lonRad);
 		const double zCart = sinLat;
 
-		FibonacciPoints.Add(FVector(x, y, zCart));
+		const FVector FibPoint(x, y, zCart);
+		FibonacciPoints.Add(FibPoint);
+		FibonacciPoints_HL.Add(FVector3_HighLow(FibPoint));
 
 		lon += dlong;
 	}
@@ -802,11 +810,15 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	TArray<FVector3d> Circumcenters; // transiant to build VoronoiGeoCenters
 	Circumcenters.Empty();
 	Circumcenters.Reserve(SphericalTriangles.Num());
-	Geo_Centroids(Circumcenters);
+	TArray<FVector3_HighLow> Circumcenters_HL; // transiant to build VoronoiGeoCenters_HL
+	Circumcenters_HL.Empty();
+	Circumcenters_HL.Reserve(SphericalTriangles.Num());
+	Geo_Centroids(Circumcenters, Circumcenters_HL);
 
-	FGeoPolygonResult tempResult = Geo_Polygons(Circumcenters);
+	FGeoPolygonResult tempResult = Geo_Polygons(Circumcenters, Circumcenters_HL);
 	VoronoiGeoMesh = tempResult.Polygons;
 	VoronoiGeoCenters = tempResult.Centers;
+	VoronoiGeoCenters_HL = tempResult.Centers_HL;
 
 
 	// --- BUILD HALF-EDGE BUFFER FOR CBT ---
@@ -896,8 +908,8 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	{
 		CBTResources = MakeUnique<FCBTResource_Interface>();
 	}
-	CBTResources->PrimeTrianglesBuffers(FibonacciPoints, SphericalTrisFlat, SphericalHalfEdges);
-	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters, RootBisectors_Buffer, CBT_Buffer);
+	CBTResources->PrimeTrianglesBuffers(FibonacciPoints_HL, SphericalTrisFlat, SphericalHalfEdges);
+	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters_HL, RootBisectors_Buffer, CBT_Buffer);
 
 	//*******************************************************************
 	//TEST for lambda function capture of inner parameters with [=, this]
@@ -909,7 +921,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	//*******************************************************************
 }
 
-void UGeoDelaunatorComponent::Geo_Circumcenters(TArray<FVector>& Circumcenters)
+void UGeoDelaunatorComponent::Geo_Circumcenters(TArray<FVector>& Circumcenters, TArray<FVector3_HighLow>& Circumcenters_HL)
 {
 	// Assumes: SphericalTriangles is filled with FIntVector(a, b, c) from Delaunator
 	//          and you have FibonacciPoints[N] as FVector on unit sphere
@@ -928,10 +940,11 @@ void UGeoDelaunatorComponent::Geo_Circumcenters(TArray<FVector>& Circumcenters)
 		FVector Normalized = V.GetSafeNormal(); // This is the circumcenter on the unit sphere
 
 		Circumcenters.Add(Normalized);
+		Circumcenters_HL.Add(FVector3_HighLow(Normalized));
 	}
 }
 
-void UGeoDelaunatorComponent::Geo_Centroids(TArray<FVector>& Circumcenters)
+void UGeoDelaunatorComponent::Geo_Centroids(TArray<FVector>& Circumcenters, TArray<FVector3_HighLow>& Circumcenters_HL)
 {
 	for (const FIntVector& Tri : SphericalTriangles)
 	{
@@ -939,11 +952,13 @@ void UGeoDelaunatorComponent::Geo_Centroids(TArray<FVector>& Circumcenters)
 		const FVector3d& B = FibonacciPoints[Tri.Y];
 		const FVector3d& C = FibonacciPoints[Tri.Z];
 
-		Circumcenters.Add((A + B + C) / 3.0);
+		const FVector3d Centroid = (A + B + C) / 3.0;
+		Circumcenters.Add(Centroid);
+		Circumcenters_HL.Add(FVector3_HighLow(Centroid));
 	}
 }
 
-FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumcenters)
+FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumcenters, TArray<FVector3_HighLow>& Circumcenters_HL)
 {
 	FGeoPolygonResult Result;
 
@@ -952,6 +967,7 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 
 	// Copy circumcenters into output
 	Result.Centers = Circumcenters;
+	Result.Centers_HL = Circumcenters_HL;
 	Result.Polygons.SetNum(NumSites);
 
 	if (NumTris == 0)
@@ -1073,6 +1089,9 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 
 			int32 i0 = Result.Centers.Add(R0);
 			int32 i1 = Result.Centers.Add(R1);
+
+			Result.Centers_HL.Add(FVector3_HighLow(R0));
+			Result.Centers_HL.Add(FVector3_HighLow(R1));
 
 			// Final polygon is 4-point pseudo-loop: [C0, R1, C1, R0]
 			TArray<int32> FakePoly = { OrderedTris[0], i1, OrderedTris[1], i0 };
