@@ -3,6 +3,7 @@
 
 #include "GeoDelaunatorComponent.h"
 #include "CBTResource_Interface.h"
+#include "IndirectInstancingSceneProxy.h"
 #include <string>
 #include <iostream>
 #include "Interfaces/IPluginManager.h"
@@ -10,13 +11,83 @@
 #include <imgui.h>
 #endif
 
-// Sets default values for this component's properties
-UGeoDelaunatorComponent::UGeoDelaunatorComponent()
+/*****************************************************************************
+*                                                                           *
+*              INDIRECT INSTANCING PRIMITIVE COMPONENT                       *
+*                                                                           *
+*  Constructor, Material, SceneProxy, Bounds, and UPrimitiveComponent       *
+*  overrides needed for indirect instanced rendering.                       *
+*                                                                           *
+*****************************************************************************/
+
+UGeoDelaunatorComponent::UGeoDelaunatorComponent(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
 {
-	// Set this component to be initialized when the game starts, and to be ticked every frame.  You can turn these features
-	// off to improve performance if you don't need them.
 	PrimaryComponentTick.bCanEverTick = true;
+
+	CastShadow = true;
+	bCastContactShadow = false;
+	bUseAsOccluder = true;
+	bAffectDynamicIndirectLighting = false;
+	bAffectDistanceFieldLighting = false;
+	bNeverDistanceCull = true;
+#if WITH_EDITORONLY_DATA
+	bEnableAutoLODGeneration = false;
+#endif
+	Mobility = EComponentMobility::Static;
 }
+
+void UGeoDelaunatorComponent::OnRegister()
+{
+	Super::OnRegister();
+}
+
+void UGeoDelaunatorComponent::OnUnregister()
+{
+	Super::OnUnregister();
+}
+
+void UGeoDelaunatorComponent::ApplyWorldOffset(const FVector& InOffset, bool bWorldShift)
+{
+	Super::ApplyWorldOffset(InOffset, bWorldShift);
+	MarkRenderStateDirty();
+}
+
+bool UGeoDelaunatorComponent::IsVisible() const
+{
+	return Super::IsVisible();
+}
+
+FBoxSphereBounds UGeoDelaunatorComponent::CalcBounds(const FTransform& LocalToWorld) const
+{
+	return FBoxSphereBounds(FBox(FVector(0.f, 0.f, 0.f), FVector(PlanetRadius * 2.0))).TransformBy(LocalToWorld);
+}
+
+FPrimitiveSceneProxy* UGeoDelaunatorComponent::CreateSceneProxy()
+{
+	return new FGeoVoronoiIndirectInstancingSceneProxy(this);
+}
+
+void UGeoDelaunatorComponent::SetMaterial(int32 InElementIndex, UMaterialInterface* InMaterial)
+{
+	if (InElementIndex == 0 && Material != InMaterial)
+	{
+		Material = InMaterial;
+		MarkRenderStateDirty();
+	}
+}
+
+void UGeoDelaunatorComponent::GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials, bool bGetDebugMaterials) const
+{
+	if (Material != nullptr)
+	{
+		OutMaterials.Add(Material);
+	}
+}
+
+/*****************************************************************************
+*          END INDIRECT INSTANCING PRIMITIVE COMPONENT                       *
+*****************************************************************************/
 
 
 // Called when the game starts
@@ -60,10 +131,10 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	UWorld* WorldActual = GetWorld();
 	if (!WorldActual) return;
 
-	static bool bShowVoronoiVerts = true;
-	static bool bShowVoronoiEdges = true;
-	static bool bShowDelaunaySites = true;
-	static bool bShowDelaunayEdges = true;
+	static bool bShowVoronoiVerts = false;
+	static bool bShowVoronoiEdges = false;
+	static bool bShowDelaunaySites = false;
+	static bool bShowDelaunayEdges = false;
 #ifdef IMGUI_API
 
 #pragma region PLANET_GENERAL_DATA_WINDOW
@@ -906,7 +977,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 
 	if (!CBTResources.IsValid())
 	{
-		CBTResources = MakeUnique<FCBTResource_Interface>();
+		CBTResources = MakeShared<FCBTResource_Interface>();
 	}
 	CBTResources->PrimeTrianglesBuffers(FibonacciPoints_HL, SphericalTrisFlat, SphericalHalfEdges);
 	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters_HL, RootBisectors_Buffer, CBT_Buffer);
