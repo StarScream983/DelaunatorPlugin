@@ -75,7 +75,7 @@ private:
 	/** Buffers to fill. */
 	TArray<GeoVoronoiIndirectInstancingMesh::FDrawInstanceBuffers> Buffers;
 	/** Per buffer frame time stamp of last usage. */
-	TArray<uint32> DiscardIds;
+TArray<uint32> DiscardIds;
 	/** Current frame time stamp. */
 	uint32 DiscardId;
 
@@ -129,10 +129,26 @@ void FGeoVoronoiIndirectInstancingRendererExtension::RegisterExtension()
 
 void FGeoVoronoiIndirectInstancingRendererExtension::ReleaseRHI()
 {
-	Buffers.Empty();
+	for (GeoVoronoiIndirectInstancingMesh::FDrawInstanceBuffers& Buffer : Buffers)
+	{
+		GeoVoronoiIndirectInstancingMesh::ReleaseInstanceBuffers(Buffer);
+	}
+
+	Buffers.Reset();
+	DiscardIds.Reset();
+	SceneProxies.Reset();
+	MainViews.Reset();
+	CullViews.Reset();
+	WorkDescs.Reset();
+
+	bInFrame = false;
+	DiscardId = 0;
 }
 
-GeoVoronoiIndirectInstancingMesh::FDrawInstanceBuffers& FGeoVoronoiIndirectInstancingRendererExtension::AddWork(FGeoVoronoiIndirectInstancingSceneProxy const* InProxy, FSceneView const* InMainView, FSceneView const* InCullView)
+GeoVoronoiIndirectInstancingMesh::FDrawInstanceBuffers& FGeoVoronoiIndirectInstancingRendererExtension::AddWork(
+	FGeoVoronoiIndirectInstancingSceneProxy const* InProxy,
+	FSceneView const* InMainView,
+	FSceneView const* InCullView)
 {
 	if (!ensure(!bInFrame))
 	{
@@ -143,38 +159,37 @@ GeoVoronoiIndirectInstancingMesh::FDrawInstanceBuffers& FGeoVoronoiIndirectInsta
 	WorkDesc.ProxyIndex = SceneProxies.AddUnique(InProxy);
 	WorkDesc.MainViewIndex = MainViews.AddUnique(InMainView);
 	WorkDesc.CullViewIndex = CullViews.AddUnique(InCullView);
-	WorkDesc.BufferIndex = -1;
+	WorkDesc.BufferIndex = INDEX_NONE;
 
-	for (FWorkDesc& It : WorkDescs)
+	for (const FWorkDesc& ExistingWork : WorkDescs)
 	{
-		if (It.ProxyIndex == WorkDesc.ProxyIndex && It.MainViewIndex == WorkDesc.MainViewIndex && It.CullViewIndex == WorkDesc.CullViewIndex && It.BufferIndex != -1)
+		if (ExistingWork.ProxyIndex == WorkDesc.ProxyIndex
+			&& ExistingWork.MainViewIndex == WorkDesc.MainViewIndex
+			&& ExistingWork.CullViewIndex == WorkDesc.CullViewIndex
+			&& ExistingWork.BufferIndex != INDEX_NONE)
 		{
-			WorkDesc.BufferIndex = It.BufferIndex;
-			break;
+			return Buffers[ExistingWork.BufferIndex];
 		}
 	}
 
-	if (WorkDesc.BufferIndex == -1)
+	for (int32 BufferIndex = 0; BufferIndex < Buffers.Num(); ++BufferIndex)
 	{
-		for (int32 BufferIndex = 0; BufferIndex < Buffers.Num(); BufferIndex++)
+		if (DiscardIds[BufferIndex] < DiscardId)
 		{
-			if (DiscardIds[BufferIndex] < DiscardId)
-			{
-				DiscardIds[BufferIndex] = DiscardId;
-				WorkDesc.BufferIndex = BufferIndex;
-				WorkDescs.Add(WorkDesc);
-				break;
-			}
+			DiscardIds[BufferIndex] = DiscardId;
+			WorkDesc.BufferIndex = BufferIndex;
+			WorkDescs.Add(WorkDesc);
+			return Buffers[BufferIndex];
 		}
 	}
 
-	if (WorkDesc.BufferIndex == -1)
-	{
-		DiscardIds.Add(DiscardId);
-		WorkDesc.BufferIndex = Buffers.AddDefaulted();
-		WorkDescs.Add(WorkDesc);
-		GeoVoronoiIndirectInstancingMesh::InitializeInstanceBuffers(GetImmediateCommandList_ForRenderCommand(), Buffers[WorkDesc.BufferIndex]);
-	}
+	DiscardIds.Add(DiscardId);
+	WorkDesc.BufferIndex = Buffers.AddDefaulted();
+	WorkDescs.Add(WorkDesc);
+
+	GeoVoronoiIndirectInstancingMesh::InitializeInstanceBuffers(
+		GetImmediateCommandList_ForRenderCommand(),
+		Buffers[WorkDesc.BufferIndex]);
 
 	return Buffers[WorkDesc.BufferIndex];
 }
@@ -193,9 +208,18 @@ void FGeoVoronoiIndirectInstancingRendererExtension::BeginFrame(FRDGBuilder& Gra
 	}
 }
 
+void FGeoVoronoiIndirectInstancingRendererExtension::EndFrame(FRDGBuilder& GraphBuilder)
+{
+	EndFrame();
+}
+
 void FGeoVoronoiIndirectInstancingRendererExtension::EndFrame()
 {
-	ensure(bInFrame);
+	if (!bInFrame)
+	{
+		return;
+	}
+
 	bInFrame = false;
 
 	SceneProxies.Reset();
@@ -203,7 +227,7 @@ void FGeoVoronoiIndirectInstancingRendererExtension::EndFrame()
 	CullViews.Reset();
 	WorkDescs.Reset();
 
-	DiscardId++;
+	++DiscardId;
 
 	for (int32 Index = 0; Index < DiscardIds.Num();)
 	{
@@ -212,18 +236,11 @@ void FGeoVoronoiIndirectInstancingRendererExtension::EndFrame()
 			GeoVoronoiIndirectInstancingMesh::ReleaseInstanceBuffers(Buffers[Index]);
 			Buffers.RemoveAtSwap(Index);
 			DiscardIds.RemoveAtSwap(Index);
+			continue;
 		}
-		else
-		{
-			++Index;
-		}
+
+		++Index;
 	}
-}
-
-void FGeoVoronoiIndirectInstancingRendererExtension::EndFrame(FRDGBuilder& GraphBuilder)
-{
-
-	EndFrame();
 }
 
 const static FName NAME_GeoVoronoiIndirectInstancing(TEXT("GeoVoronoiIndirectInstancing"));
@@ -231,14 +248,17 @@ const static FName NAME_GeoVoronoiIndirectInstancing(TEXT("GeoVoronoiIndirectIns
 FGeoVoronoiIndirectInstancingSceneProxy::FGeoVoronoiIndirectInstancingSceneProxy(UGeoDelaunatorComponent* InComponent)
 	: FPrimitiveSceneProxy(InComponent, NAME_GeoVoronoiIndirectInstancing), VertexFactory(nullptr)
 {
-	GeoVoronoiIndirectInstancingRendererExtension.RegisterExtension();
+	UE_LOG(LogTemp, Warning, TEXT("SceneProxy ctor, CBTResources valid=%d"),
+		InComponent->GetCBTResources().IsValid() ? 1 : 0);
 
+	GeoVoronoiIndirectInstancingRendererExtension.RegisterExtension();
 	bHasDeformableMesh = false;
 
 	UMaterialInterface* ComponentMaterial = InComponent->GetMaterial();
 	const bool bValidMaterial = ComponentMaterial != nullptr && ComponentMaterial->CheckMaterialUsage_Concurrent(MATUSAGE_VirtualHeightfieldMesh);
 	Material = bValidMaterial ? ComponentMaterial->GetRenderProxy() : UMaterial::GetDefaultMaterial(MD_Surface)->GetRenderProxy();
 	MaterialRelevance = Material->GetMaterialInterface()->GetRelevance_Concurrent(GetScene().GetFeatureLevel());
+
 	// Capture the CBT GPU resource pointer (lifetime owned by UGeoDelaunatorComponent)
 	CBTResources = InComponent->GetCBTResources();
 }
@@ -261,6 +281,7 @@ void FGeoVoronoiIndirectInstancingSceneProxy::OnTransformChanged()
 
 void FGeoVoronoiIndirectInstancingSceneProxy::CreateRenderThreadResources()
 {
+	UE_LOG(LogTemp, Warning, TEXT("SceneProxy::CreateRenderThreadResources"));
 	// Gather vertex factory uniform parameters.
 	FGeoVoronoiIndirectInstancingParameters UniformParams;
 	// TODO UNIFORM INIT
@@ -282,7 +303,14 @@ void FGeoVoronoiIndirectInstancingSceneProxy::DestroyRenderThreadResources()
 
 FPrimitiveViewRelevance FGeoVoronoiIndirectInstancingSceneProxy::GetViewRelevance(const FSceneView* View) const
 {
-	const bool bValid = true;
+	// Do not draw at all until the CBT GPU buffers are uploaded and ready.
+	const bool bHasResources = CBTResources.IsValid();
+	const bool bGPUReady = bHasResources && CBTResources->IsGPUReady();
+
+	UE_LOG(LogTemp, Warning, TEXT("GetViewRelevance: bHasResources=%d bGPUReady=%d"),
+		bHasResources ? 1 : 0, bGPUReady ? 1 : 0);
+
+	const bool bValid = CBTResources.IsValid() && CBTResources->IsGPUReady();
 	const bool bIsHiddenInEditor = bHiddenInEditor && View->Family->EngineShowFlags.Editor;
 
 	FPrimitiveViewRelevance Result;
@@ -303,72 +331,81 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 {
 	check(IsInRenderingThread());
 
+	if (VertexFactory == nullptr || Material == nullptr || !ViewFamily.Views.IsValidIndex(0))
+	{
+		return;
+	}
+
 	if (GeoVoronoiIndirectInstancingRendererExtension.IsInFrame())
 	{
 		return;
 	}
 
-	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
+	FSceneView const* MainView = ViewFamily.Views[0];
+
+	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
 	{
-		if (VisibilityMap & (1 << ViewIndex))
+		if ((VisibilityMap & (1u << ViewIndex)) == 0u)
 		{
-			GeoVoronoiIndirectInstancingMesh::FDrawInstanceBuffers& Buffers = GeoVoronoiIndirectInstancingRendererExtension.AddWork(this, ViewFamily.Views[0], Views[ViewIndex]);
+			continue;
+		}
 
-			FMeshBatch& Mesh = Collector.AllocateMesh();
-			Mesh.bWireframe = AllowDebugViewmodes() && ViewFamily.EngineShowFlags.Wireframe;
-			Mesh.bUseWireframeSelectionColoring = IsSelected();
-			Mesh.VertexFactory = VertexFactory;
-			Mesh.MaterialRenderProxy = Material;
-			Mesh.ReverseCulling = IsLocalToWorldDeterminantNegative();
-			Mesh.Type = PT_TriangleList;
-			Mesh.DepthPriorityGroup = SDPG_World;
-			Mesh.bCanApplyViewModeOverrides = true;
-			Mesh.bUseForMaterial = true;
-			Mesh.CastShadow = true;
-			Mesh.bUseForDepthPass = true;
+		GeoVoronoiIndirectInstancingMesh::FDrawInstanceBuffers& DrawBuffers =
+			GeoVoronoiIndirectInstancingRendererExtension.AddWork(this, MainView, Views[ViewIndex]);
 
-			Mesh.Elements.SetNumZeroed(1);
-			{
-				FMeshBatchElement& BatchElement = Mesh.Elements[0];
+		FMeshBatch& Mesh = Collector.AllocateMesh();
+		Mesh.bWireframe = AllowDebugViewmodes() && ViewFamily.EngineShowFlags.Wireframe;
+		Mesh.bUseWireframeSelectionColoring = IsSelected();
+		Mesh.VertexFactory = VertexFactory;
+		Mesh.MaterialRenderProxy = Material;
+		Mesh.ReverseCulling = IsLocalToWorldDeterminantNegative();
+		Mesh.Type = PT_TriangleList;
+		Mesh.DepthPriorityGroup = SDPG_World;
+		Mesh.bCanApplyViewModeOverrides = true;
+		Mesh.bUseForMaterial = true;
+		Mesh.CastShadow = true;
+		Mesh.bUseForDepthPass = true;
 
-				BatchElement.IndexBuffer = VertexFactory->GetIndexBuffer();
-				BatchElement.IndirectArgsBuffer = Buffers.IndirectArgsBuffer;
-				BatchElement.IndirectArgsOffset = 0;
+		Mesh.Elements.SetNumZeroed(1);
 
-				BatchElement.FirstIndex = 0;
-				BatchElement.NumPrimitives = 0;
-				BatchElement.MinVertexIndex = 0;
-				BatchElement.MaxVertexIndex = 0;
+		FMeshBatchElement& BatchElement = Mesh.Elements[0];
+		BatchElement.IndexBuffer = VertexFactory->GetIndexBuffer();
+		BatchElement.IndirectArgsBuffer = DrawBuffers.IndirectArgsBuffer;
+		BatchElement.IndirectArgsOffset = 0;
+		BatchElement.FirstIndex = 0;
+		BatchElement.NumPrimitives = 0;
+		BatchElement.MinVertexIndex = 0;
+		BatchElement.MaxVertexIndex = 2;
 
-				BatchElement.PrimitiveIdMode = PrimID_ForceZero;
-				BatchElement.PrimitiveUniformBuffer = GetUniformBuffer();
+		BatchElement.PrimitiveIdMode = PrimID_ForceZero;
+		BatchElement.PrimitiveUniformBuffer = GetUniformBuffer();
 
-				FGeoVoronoiIndirectInstancingUserData* UserData = &Collector.AllocateOneFrameResource<FGeoVoronoiIndirectInstancingUserData>();
-				BatchElement.UserData = (void*)UserData;
+		FGeoVoronoiIndirectInstancingUserData* UserData =
+			&Collector.AllocateOneFrameResource<FGeoVoronoiIndirectInstancingUserData>();
+		BatchElement.UserData = UserData;
 
-				UserData->InstanceBufferSRV = Buffers.InstanceBufferSRV;
+		UserData->InstanceBufferSRV = DrawBuffers.InstanceBufferSRV;
+		UserData->CBT_FibonacciPointsSRV = nullptr;
+		UserData->CBT_SphericalTrianglesSRV = nullptr;
 
-				// Bind CBT buffers so the vertex factory can fetch triangle vertices
-				if (CBTResources && CBTResources->IsGPUReady())
-				{
-					UserData->CBT_FibonacciPointsSRV = CBTResources->GetFibonacciPointsSRV();
-					UserData->CBT_SphericalTrianglesSRV = CBTResources->GetSphericalTrianglesSRV();
-				}
+		if (CBTResources.IsValid() && CBTResources->IsGPUReady())
+		{
+			UserData->CBT_FibonacciPointsSRV = CBTResources->GetFibonacciPointsSRV();
+			UserData->CBT_SphericalTrianglesSRV = CBTResources->GetSphericalTrianglesSRV();
+		}
 
-				FSceneView const* MainView = ViewFamily.Views[0];
-				UserData->LodViewOrigin = (FVector3f)MainView->ViewMatrices.GetViewOrigin();
+		UserData->LodViewOrigin = (FVector3f)MainView->ViewMatrices.GetViewOrigin();
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-				const FViewMatrices* FrozenViewMatrices = MainView->State != nullptr ? MainView->State->GetFrozenViewMatrices() : nullptr;
-				if (FrozenViewMatrices != nullptr)
-				{
-					UserData->LodViewOrigin = (FVector3f)FrozenViewMatrices->GetViewOrigin();
-				}
-#endif
-			}
-
-			Collector.AddMesh(ViewIndex, Mesh);
+		const FViewMatrices* FrozenViewMatrices =
+			MainView->State != nullptr ? MainView->State->GetFrozenViewMatrices() : nullptr;
+		if (FrozenViewMatrices != nullptr)
+		{
+			UserData->LodViewOrigin = (FVector3f)FrozenViewMatrices->GetViewOrigin();
 		}
+#endif
+
+		Collector.AddMesh(ViewIndex, Mesh);
 	}
 }
 
@@ -377,6 +414,7 @@ namespace GeoVoronoiIndirectInstancingMesh
 	/* Keep indirect args offsets in sync with ISM.usf. */
 	static const int32 IndirectArgsByteOffset_FinalCull = 0;
 	static const int32 IndirectArgsByteSize = 4 * sizeof(uint32);
+	static const uint32 MaxSupportedInstances = 1u << 18;
 
 	struct WorkerQueueInfo
 	{
@@ -432,7 +470,7 @@ namespace GeoVoronoiIndirectInstancingMesh
 			SHADER_PARAMETER_TEXTURE(Texture2D, LodBiasMinMaxTexture)
 			SHADER_PARAMETER_TEXTURE(Texture2D<float>, OcclusionTexture)
 			SHADER_PARAMETER(int32, OcclusionLevelOffset)
-			SHADER_PARAMETER_TEXTURE(Texture2D<uint>, PageTableTexture)
+			SHADER_PARAMETER_TEXTURE(Texture2D<uint> , PageTableTexture)
 			SHADER_PARAMETER(uint32, MaxLevel)
 			SHADER_PARAMETER(FVector4f, PageTableSize)
 			SHADER_PARAMETER(uint32, PageTableFeedbackId)
@@ -508,6 +546,7 @@ namespace GeoVoronoiIndirectInstancingMesh
 			SHADER_PARAMETER_UAV(RWStructuredBuffer<GeoVoronoiIndirectInstancingMesh::FGeoVoronoiIndirectInstancingRenderInstance>, RWInstanceBuffer)
 			SHADER_PARAMETER_UAV(RWBuffer<uint>, RWIndirectArgsBuffer)
 			RDG_BUFFER_ACCESS(IndirectArgsBuffer, ERHIAccess::IndirectArgs)
+			SHADER_PARAMETER(uint32, MaxInstances)
 			// CBT buffers
 			SHADER_PARAMETER(uint32, NumTriangles)
 			SHADER_PARAMETER(uint32, NumVertices)
@@ -575,6 +614,27 @@ namespace GeoVoronoiIndirectInstancingMesh
 
 	struct FProxyDesc
 	{
+		FProxyDesc()
+			: PageTableTexture(nullptr)
+			, HeightMinMaxTexture(nullptr)
+			, LodBiasMinMaxTexture(nullptr)
+			, MinMaxLevelOffset(0)
+			, MaxLevel(0)
+			, NumForceLoadLods(0)
+			, PageTableFeedbackId(0)
+			, NumPhysicalAddressBits(0)
+			, PageTableSize(0.0, 0.0, 0.0, 0.0)
+			, PhysicalPageTransform(0.0, 0.0, 0.0, 0.0)
+			, UVToWorld(FMatrix::Identity)
+			, UVToWorldScale(FVector::ZeroVector)
+			, NumQuadsPerTileSide(0)
+			, MaxPersistentQueueItems(0)
+			, MaxRenderItems(0)
+			, MaxFeedbackItems(0)
+			, NumCollectPassWavefronts(0)
+		{
+		}
+
 		FRHITexture* PageTableTexture;
 		FRHITexture* HeightMinMaxTexture;
 		FRHITexture* LodBiasMinMaxTexture;
@@ -600,6 +660,19 @@ namespace GeoVoronoiIndirectInstancingMesh
 
 	struct FMainViewDesc
 	{
+		FMainViewDesc()
+			: ViewDebug(nullptr)
+			, ViewOrigin(FVector::ZeroVector)
+			, LodDistances(0.0, 0.0, 0.0, 0.0)
+			, LodBiasScale(0.0f)
+			, OcclusionLevelOffset(0)
+		{
+			for (int32 PlaneIndex = 0; PlaneIndex < 5; ++PlaneIndex)
+			{
+				Planes[PlaneIndex] = FVector4(0.0, 0.0, 0.0, 0.0);
+			}
+		}
+
 		FSceneView const* ViewDebug;
 		FVector ViewOrigin;
 		FVector4 LodDistances;
@@ -611,6 +684,16 @@ namespace GeoVoronoiIndirectInstancingMesh
 
 	struct FChildViewDesc
 	{
+		FChildViewDesc()
+			: ViewDebug(nullptr)
+			, bIsMainView(false)
+		{
+			for (int32 PlaneIndex = 0; PlaneIndex < 5; ++PlaneIndex)
+			{
+				Planes[PlaneIndex] = FVector4(0.0, 0.0, 0.0, 0.0);
+			}
+		}
+
 		FSceneView const* ViewDebug;
 		bool bIsMainView;
 		FVector4 Planes[5];
@@ -640,7 +723,7 @@ namespace GeoVoronoiIndirectInstancingMesh
 		{
 			FRHIResourceCreateInfo CreateInfo(TEXT("FGeoVoronoiIndirectInstancing.InstanceBuffer"));
 			const int32 InstanceSize = sizeof(GeoVoronoiIndirectInstancingMesh::FGeoVoronoiIndirectInstancingRenderInstance);
-			const int32 InstanceBufferSize = 1024 * 4 * InstanceSize;
+			const int32 InstanceBufferSize = int32(GeoVoronoiIndirectInstancingMesh::MaxSupportedInstances) * InstanceSize;
 			InBuffers.InstanceBuffer = InRHICmdList.CreateStructuredBuffer(InstanceSize, InstanceBufferSize, BUF_UnorderedAccess | BUF_ShaderResource, ERHIAccess::SRVMask, CreateInfo);
 			InBuffers.InstanceBufferUAV = InRHICmdList.CreateUnorderedAccessView(InBuffers.InstanceBuffer, false, false);
 			InBuffers.InstanceBufferSRV = InRHICmdList.CreateShaderResourceView(InBuffers.InstanceBuffer);
@@ -786,34 +869,56 @@ namespace GeoVoronoiIndirectInstancingMesh
 
 	void AddPass_CullInstances(FRDGBuilder& GraphBuilder, FGlobalShaderMap* InGlobalShaderMap, FProxyDesc const& InDesc, FVolatileResources& InVolatileResources, FDrawInstanceBuffers& InOutputResources, FChildViewDesc const& InViewDesc, TSharedPtr<FCBTResource_Interface> InCBTResources)
 	{
-		// Skip the entire pass if CBT buffers aren't ready on the GPU yet
-		if (!InCBTResources || !InCBTResources->IsGPUReady())
+		if (!InCBTResources.IsValid() || !InCBTResources->IsGPUReady())
 		{
 			return;
 		}
 
-		FCullInstancesVHM_CS::FParameters* PassParameters = GraphBuilder.AllocParameters<FCullInstancesVHM_CS::FParameters>();
+		const uint32 NumTriangles = InCBTResources->GetNumTriangles();
+		if (NumTriangles == 0u)
+		{
+			return;
+		}
+
+		FCullInstancesVHM_CS::FParameters* PassParameters =
+			GraphBuilder.AllocParameters<FCullInstancesVHM_CS::FParameters>();
+
+		PassParameters->HeightMinMaxTexture =
+			InDesc.HeightMinMaxTexture != nullptr
+				? InDesc.HeightMinMaxTexture
+				: GHeightMinMaxDefaultTexture->TextureRHI.GetReference();
+		PassParameters->MinMaxTextureSampler = TStaticSamplerState<SF_Point>::GetRHI();
+		PassParameters->MinMaxLevelOffset = InDesc.MinMaxLevelOffset;
+		PassParameters->PageTableTexture =
+			InDesc.PageTableTexture != nullptr
+				? InDesc.PageTableTexture
+				: GBlackTexture->TextureRHI.GetReference();
+		PassParameters->PageTableSize = FVector4f(InDesc.PageTableSize);
+		PassParameters->PhysicalPageTransform = FVector4f(InDesc.PhysicalPageTransform);
+		PassParameters->NumPhysicalAddressBits = InDesc.NumPhysicalAddressBits;
+
+		for (int32 PlaneIndex = 0; PlaneIndex < 5; ++PlaneIndex)
+		{
+			PassParameters->FrustumPlanes[PlaneIndex] = FVector4f(InViewDesc.Planes[PlaneIndex]);
+		}
 
 		PassParameters->QuadBuffer = InVolatileResources.QuadBufferSRV;
 		PassParameters->IndirectArgsBuffer = InVolatileResources.IndirectArgsBuffer;
 		PassParameters->IndirectArgsBufferSRV = InVolatileResources.IndirectArgsBufferSRV;
 		PassParameters->RWInstanceBuffer = InOutputResources.InstanceBufferUAV;
 		PassParameters->RWIndirectArgsBuffer = InOutputResources.IndirectArgsBufferUAV;
+		PassParameters->MaxInstances = GeoVoronoiIndirectInstancingMesh::MaxSupportedInstances;
 
 		// Bind CBT GPU buffers
-		PassParameters->NumTriangles = InCBTResources->GetNumTriangles();
+		PassParameters->NumTriangles = NumTriangles;
 		PassParameters->NumVertices = InCBTResources->GetNumFibonacciPoints();
 		PassParameters->CBT_FibonacciPoints = InCBTResources->GetFibonacciPointsSRV();
 		PassParameters->CBT_SphericalTriangles = InCBTResources->GetSphericalTrianglesSRV();
 
-		int32 IndirectArgOffset = GeoVoronoiIndirectInstancingMesh::IndirectArgsByteOffset_FinalCull;
-
 		FCullInstancesVHM_CS::FPermutationDomain PermutationVector;
 		PermutationVector.Set<FCullInstancesVHM_CS::FReuseCullDim>(InViewDesc.bIsMainView);
 
-		const uint32 NumTriangles = InCBTResources->GetNumTriangles();
 		const FIntVector GroupCount(FMath::DivideAndRoundUp<int32>((int32)NumTriangles, 64), 1, 1);
-
 		TShaderMapRef<FCullInstancesVHM_CS> ComputeShader(InGlobalShaderMap, PermutationVector);
 		/*FComputeShaderUtils::AddPass(
 			GraphBuilder,
@@ -821,10 +926,12 @@ namespace GeoVoronoiIndirectInstancingMesh
 			ComputeShader, PassParameters,
 			InVolatileResources.IndirectArgsBuffer,
 			IndirectArgOffset);*/
+
 		FComputeShaderUtils::AddPass(
 			GraphBuilder,
 			RDG_EVENT_NAME("CullInstances"),
-			ComputeShader, PassParameters,
+			ComputeShader,
+			PassParameters,
 			GroupCount);
 	}
 }
@@ -834,30 +941,52 @@ void FGeoVoronoiIndirectInstancingRendererExtension::SubmitWork(FRDGBuilder& Gra
 	WorkDescs.Sort(FWorkDescSort());
 
 	TArray<int32, TInlineAllocator<8>> UsedBufferIndices;
-	for (FWorkDesc WorkdDesc : WorkDescs)
+	for (const FWorkDesc& WorkDesc : WorkDescs)
 	{
-		UsedBufferIndices.Add(WorkdDesc.BufferIndex);
+		UsedBufferIndices.AddUnique(WorkDesc.BufferIndex);
 	}
+
+	if (UsedBufferIndices.Num() == 0)
+	{
+		return;
+	}
+
 	GeoVoronoiIndirectInstancingMesh::AddPass_TransitionAllDrawBuffers(GraphBuilder, Buffers, UsedBufferIndices, true);
 
-	for (FWorkDesc WorkDesc : WorkDescs)
+	for (const FWorkDesc& WorkDesc : WorkDescs)
 	{
-		GeoVoronoiIndirectInstancingMesh::AddPass_InitInstanceBuffer(GraphBuilder, GetGlobalShaderMap(GMaxRHIFeatureLevel), Buffers[WorkDesc.BufferIndex]);
+		GeoVoronoiIndirectInstancingMesh::AddPass_InitInstanceBuffer(
+			GraphBuilder,
+			GetGlobalShaderMap(GMaxRHIFeatureLevel),
+			Buffers[WorkDesc.BufferIndex]);
 	}
 
 	const int32 NumWorkItems = WorkDescs.Num();
 	int32 WorkIndex = 0;
+
 	while (WorkIndex < NumWorkItems)
 	{
-		FGeoVoronoiIndirectInstancingSceneProxy const* Proxy = SceneProxies[WorkDescs[WorkIndex].ProxyIndex];
+		const FGeoVoronoiIndirectInstancingSceneProxy* Proxy = SceneProxies[WorkDescs[WorkIndex].ProxyIndex];
 
 		GeoVoronoiIndirectInstancingMesh::FProxyDesc ProxyDesc;
-
+		ProxyDesc.PageTableTexture = GBlackTexture->TextureRHI.GetReference();
+		ProxyDesc.HeightMinMaxTexture = GeoVoronoiIndirectInstancingMesh::GHeightMinMaxDefaultTexture->TextureRHI.GetReference();
+		ProxyDesc.LodBiasMinMaxTexture = GeoVoronoiIndirectInstancingMesh::GHeightMinMaxDefaultTexture->TextureRHI.GetReference();
+		ProxyDesc.MinMaxLevelOffset = 0;
+		ProxyDesc.MaxLevel = 0;
+		ProxyDesc.NumForceLoadLods = 0;
+		ProxyDesc.PageTableFeedbackId = 0;
+		ProxyDesc.NumPhysicalAddressBits = 0;
+		ProxyDesc.PageTableSize = FVector4(0.0, 0.0, 0.0, 0.0);
+		ProxyDesc.PhysicalPageTransform = FVector4(0.0, 0.0, 0.0, 0.0);
+		ProxyDesc.UVToWorld = FMatrix::Identity;
+		ProxyDesc.UVToWorldScale = FVector::OneVector;
+		ProxyDesc.NumQuadsPerTileSide = 0;
 		ProxyDesc.MaxPersistentQueueItems = 1 << FMath::CeilLogTwo(1024 * 4);
 		ProxyDesc.MaxRenderItems = 1024 * 4;
-		ProxyDesc.MaxFeedbackItems = 1024 * 4; // ← add this
+		ProxyDesc.MaxFeedbackItems = 1024 * 4;
 		ProxyDesc.NumCollectPassWavefronts = 16;
-		ProxyDesc.CBTResources = Proxy->CBTResources;
+		ProxyDesc.CBTResources = Proxy != nullptr ? Proxy->CBTResources : nullptr;
 
 		while (WorkIndex < NumWorkItems && SceneProxies[WorkDescs[WorkIndex].ProxyIndex] == Proxy)
 		{
@@ -866,29 +995,50 @@ void FGeoVoronoiIndirectInstancingRendererExtension::SubmitWork(FRDGBuilder& Gra
 			GeoVoronoiIndirectInstancingMesh::FViewData MainViewData;
 			GeoVoronoiIndirectInstancingMesh::GetViewData(MainView, MainViewData);
 
-			GeoVoronoiIndirectInstancingMesh::FMainViewDesc MainViewDesc;
+			GeoVoronoiIndirectInstancingMesh::FMainViewDesc MainViewDesc = {};
 			MainViewDesc.ViewDebug = MainView;
 			MainViewDesc.ViewOrigin = MainViewData.ViewOrigin;
 
+			const int32 NumMainPlanes = FMath::Min(MainViewData.ViewFrustum.Planes.Num(), 5);
+			for (int32 PlaneIndex = 0; PlaneIndex < NumMainPlanes; ++PlaneIndex)
+			{
+				const FPlane& Plane = MainViewData.ViewFrustum.Planes[PlaneIndex];
+				MainViewDesc.Planes[PlaneIndex] = FVector4(Plane.X, Plane.Y, Plane.Z, Plane.W);
+			}
+
+			// Build only the volatile buffers CullInstances needs (QuadBuffer, IndirectArgs).
+			// Skip InitBuffers and CollectQuads — not needed for CBT direct triangle dispatch.
 			GeoVoronoiIndirectInstancingMesh::FVolatileResources VolatileResources;
 			GeoVoronoiIndirectInstancingMesh::InitializeResources(GraphBuilder, ProxyDesc, MainViewDesc, VolatileResources);
 
-			GeoVoronoiIndirectInstancingMesh::AddPass_InitBuffers(GraphBuilder, GetGlobalShaderMap(GMaxRHIFeatureLevel), ProxyDesc, VolatileResources);
-			GeoVoronoiIndirectInstancingMesh::AddPass_CollectQuads(GraphBuilder, GetGlobalShaderMap(GMaxRHIFeatureLevel), ProxyDesc, VolatileResources, MainViewDesc);
-			while (WorkIndex < NumWorkItems&& MainViews[WorkDescs[WorkIndex].MainViewIndex] == MainView)
+			while (WorkIndex < NumWorkItems && MainViews[WorkDescs[WorkIndex].MainViewIndex] == MainView)
 			{
 				FSceneView const* CullView = CullViews[WorkDescs[WorkIndex].CullViewIndex];
-				FConvexVolume const* ShadowFrustum = CullView->GetDynamicMeshElementsShadowCullFrustum();
-				FConvexVolume const& Frustum = ShadowFrustum != nullptr && ShadowFrustum->Planes.Num() > 0 ? *ShadowFrustum : CullView->ViewFrustum;
-				const FVector PreShadowTranslation = ShadowFrustum != nullptr ? CullView->GetPreShadowTranslation() : FVector::ZeroVector;
+
+				GeoVoronoiIndirectInstancingMesh::FViewData CullViewData;
+				GeoVoronoiIndirectInstancingMesh::GetViewData(CullView, CullViewData);
 
 				GeoVoronoiIndirectInstancingMesh::FChildViewDesc ChildViewDesc;
-				ChildViewDesc.ViewDebug = MainView;
-				ChildViewDesc.bIsMainView = CullView == MainView;
+				ChildViewDesc.ViewDebug = CullView;
+				ChildViewDesc.bIsMainView = (CullView == MainView);
 
-				GeoVoronoiIndirectInstancingMesh::AddPass_CullInstances(GraphBuilder, GetGlobalShaderMap(GMaxRHIFeatureLevel), ProxyDesc, VolatileResources, Buffers[WorkDescs[WorkIndex].BufferIndex], ChildViewDesc, ProxyDesc.CBTResources);
+				const int32 NumCullPlanes = FMath::Min(CullViewData.ViewFrustum.Planes.Num(), 5);
+				for (int32 PlaneIndex = 0; PlaneIndex < NumCullPlanes; ++PlaneIndex)
+				{
+					const FPlane& Plane = CullViewData.ViewFrustum.Planes[PlaneIndex];
+					ChildViewDesc.Planes[PlaneIndex] = FVector4(Plane.X, Plane.Y, Plane.Z, Plane.W);
+				}
 
-				WorkIndex++;
+				GeoVoronoiIndirectInstancingMesh::AddPass_CullInstances(
+					GraphBuilder,
+					GetGlobalShaderMap(GMaxRHIFeatureLevel),
+					ProxyDesc,
+					VolatileResources,
+					Buffers[WorkDescs[WorkIndex].BufferIndex],
+					ChildViewDesc,
+					ProxyDesc.CBTResources);
+
+				++WorkIndex;
 			}
 		}
 	}

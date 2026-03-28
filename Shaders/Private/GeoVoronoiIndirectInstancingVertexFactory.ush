@@ -7,13 +7,11 @@
 
 StructuredBuffer<QuadRenderInstance> InstanceBuffer;
 float3 LodViewOrigin;
-// float4 LodDistances;
 
-/** Per-vertex inputs. No vertex buffers are bound. */
 struct FVertexFactoryInput
 {
     uint InstanceId : SV_InstanceID;
-    uint VertexId : SV_VertexID;
+    uint VertexId   : SV_VertexID;
 };
 
 /** Cached intermediates that would otherwise have to be computed multiple times. Avoids relying on the compiler to optimize out redundant operations. */
@@ -31,14 +29,13 @@ FPrimitiveSceneData GetPrimitiveData(FVertexFactoryIntermediates Intermediates)
     return Intermediates.SceneData.Primitive;
 }
 
-/** Attributes to interpolate from the vertex shader to the pixel shader. */
 struct FVertexFactoryInterpolantsVSToPS
 {
 #if NUM_TEX_COORD_INTERPOLATORS
-	float4 TexCoords[(NUM_TEX_COORD_INTERPOLATORS + 1) / 2] : TEXCOORD0;
+    float4 TexCoords[(NUM_TEX_COORD_INTERPOLATORS + 1) / 2] : TEXCOORD0;
 #endif
 #if INSTANCED_STEREO
-	nointerpolation uint EyeIndex : PACKED_EYE_INDEX;
+    nointerpolation uint EyeIndex : PACKED_EYE_INDEX;
 #endif
 };
 
@@ -48,31 +45,38 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
     FVertexFactoryIntermediates Intermediates;
     Intermediates.SceneData = VF_GPUSCENE_GET_INTERMEDIATES(Input);
 
-    const QuadRenderInstance Item = InstanceBuffer[Input.InstanceId];
-    uint2 VertexCoord = uint2(Input.VertexId % 2, Input.VertexId / 2);
-    const uint2 Pos = VertexCoord * 1000.f;
-    const uint Level = 0; //UnpackLevel(Item);
-	
-	
-    const float3 LocalUVTransform = float3(0.0f, 0.0f, 0.0f);
+    const QuadRenderInstance Instance = InstanceBuffer[Input.InstanceId];
+    const uint TriangleId = GetTriangleId(Instance);
 
-    float2 LocalUV = (float2) VertexCoord / (float) (2 - 1);
+    float3 V0;
+    float3 V1;
+    float3 V2;
+    GetTriangleVertices(TriangleId, V0, V1, V2);
 
-	// Calculate vertex UV details before morphing
-    float2 XY = ((float2) Pos + LocalUV) * (float) (1u << Level);
-    float2 NormalizedPos = (XY * 1.f);
-    float SampleLevel = Level;
+    float3 VertexPos;
+    if (Input.VertexId == 0)
+    {
+        VertexPos = V0;
+    }
+    else if (Input.VertexId == 1)
+    {
+        VertexPos = V1;
+    }
+    else
+    {
+        VertexPos = V2;
+    }
 
-	// Position in space of virtual texture volume
-	// Intermediates.VTPos = float3(0, 0, 0);
+    Intermediates.LocalPos = VertexPos * 600000000.0f; //3000.f
+    Intermediates.WorldNormal = GetTriangleNormal(V0, V1, V2);
 
-	// Position in local space
-    Intermediates.LocalPos = float3(Pos, Input.InstanceId * 100.f); //mul(float4(Intermediates.VTPos, 1), VHM.VirtualHeightfieldToLocal).xyz;
-    Intermediates.LocalPos /= ((float) (Level + 1));
-	
-    Intermediates.LocalUV = NormalizedPos;
-
-    Intermediates.WorldNormal = float3(0, 0, 1);
+    const float2 BarycentricUVs[3] =
+    {
+        float2(0.0f, 0.0f),
+        float2(1.0f, 0.0f),
+        float2(0.0f, 1.0f)
+    };
+    Intermediates.LocalUV = BarycentricUVs[min(Input.VertexId, 2u)];
 
     return Intermediates;
 }
@@ -103,16 +107,14 @@ FMaterialVertexParameters GetMaterialVertexParameters(FVertexFactoryInput Input,
     return Result;
 }
 
-/** Get ID in GPU Scene. We don't implement support because we create/consume our own instancing buffer. */
 uint GetPrimitiveId(FVertexFactoryInterpolantsVSToPS Interpolants)
 {
     return 0;
 }
 
-/** Get ID in the GPU Scene. */
 uint VertexFactoryGetPrimitiveId(FVertexFactoryInterpolantsVSToPS Interpolants)
 {
-    return GetPrimitiveId(Interpolants);
+    return 0;
 }
 
 /** Computes the world space position of this vertex. */
@@ -185,25 +187,17 @@ float2 GetUV(FVertexFactoryInterpolantsVSToPS Interpolants, uint UVIndex)
 
 #endif
 
-/** Constructs values that need to be interpolated from the vertex shader to the pixel shader. */
 FVertexFactoryInterpolantsVSToPS VertexFactoryGetInterpolantsVSToPS(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates, FMaterialVertexParameters VertexParameters)
 {
-    FVertexFactoryInterpolantsVSToPS Interpolants;
-
-	// Initialize the whole struct to 0
-	// Really only the last two components of the packed UVs have the opportunity to be uninitialized
-    Interpolants = (FVertexFactoryInterpolantsVSToPS) 0;
+    FVertexFactoryInterpolantsVSToPS Interpolants = (FVertexFactoryInterpolantsVSToPS)0;
 
 #if NUM_TEX_COORD_INTERPOLATORS
-	float2 CustomizedUVs[NUM_TEX_COORD_INTERPOLATORS];
-	GetMaterialCustomizedUVs(VertexParameters, CustomizedUVs);
-	GetCustomInterpolators(VertexParameters, CustomizedUVs);
-
-	UNROLL
-	for (int CoordinateIndex = 0; CoordinateIndex < NUM_TEX_COORD_INTERPOLATORS; CoordinateIndex++)
-	{
-		SetUV(Interpolants, CoordinateIndex, CustomizedUVs[CoordinateIndex]);
-	}
+    float2 CustomizedUVs[NUM_TEX_COORD_INTERPOLATORS];
+    GetMaterialCustomizedUVs(VertexParameters, CustomizedUVs);
+    GetCustomInterpolators(VertexParameters, CustomizedUVs);
+    UNROLL
+    for (int CoordIdx = 0; CoordIdx < NUM_TEX_COORD_INTERPOLATORS; CoordIdx++)
+        SetUV(Interpolants, CoordIdx, CustomizedUVs[CoordIdx]);
 #endif
 
     return Interpolants;

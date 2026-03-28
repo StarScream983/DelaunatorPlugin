@@ -43,6 +43,7 @@ UGeoDelaunatorComponent::UGeoDelaunatorComponent(const FObjectInitializer& Objec
 void UGeoDelaunatorComponent::OnRegister()
 {
 	Super::OnRegister();
+	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::OnRegister"));
 }
 
 void UGeoDelaunatorComponent::OnUnregister()
@@ -63,11 +64,15 @@ bool UGeoDelaunatorComponent::IsVisible() const
 
 FBoxSphereBounds UGeoDelaunatorComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
-	return FBoxSphereBounds(FBox(FVector(0.f, 0.f, 0.f), FVector(PlanetRadius * 2.0))).TransformBy(LocalToWorld);
+	//return FBoxSphereBounds(FBox(FVector(0.f, 0.f, 0.f), FVector(PlanetRadius * 2.0))).TransformBy(LocalToWorld);
+
+	const FVector Extent(2.0*PlanetRadius);
+	return FBoxSphereBounds(FBox(-Extent, Extent)).TransformBy(LocalToWorld);
 }
 
 FPrimitiveSceneProxy* UGeoDelaunatorComponent::CreateSceneProxy()
 {
+	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::CreateSceneProxy"));
 	return new FGeoVoronoiIndirectInstancingSceneProxy(this);
 }
 
@@ -97,8 +102,13 @@ void UGeoDelaunatorComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
+	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::BeginPlay"));
+
 	RngStream.Initialize(RandomSeed);
 	GeoDelauny();
+
+	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::BeginPlay after GeoDelauny, CBTResources valid=%d"),
+		CBTResources.IsValid() ? 1 : 0);
 }
 
 void UGeoDelaunatorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -983,6 +993,11 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	}
 	CBTResources->PrimeTrianglesBuffers(FibonacciPoints_HL, SphericalTrisFlat, SphericalHalfEdges);
 	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters_HL, RootBisectors_Buffer, CBT_Buffer);
+
+	// CBTResources is now valid — recreate the scene proxy so it captures the new pointer.
+	// InitRHI runs asynchronously on the render thread; the proxy's GetViewRelevance
+	// gates on IsGPUReady() so it will suppress drawing until upload completes.
+	MarkRenderStateDirty();
 
 	//*******************************************************************
 	//TEST for lambda function capture of inner parameters with [=, this]

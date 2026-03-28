@@ -156,12 +156,29 @@ bool FGeoVoronoiIndirectInstancingVertexFactory::ShouldCompilePermutation(const 
 void FGeoVoronoiIndirectInstancingVertexFactory::ModifyCompilationEnvironment(const FVertexFactoryShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 {
 	// TODO
+	OutEnvironment.SetDefine(TEXT("VF_SUPPORTS_PRIMITIVE_SCENE_DATA"), 0);
+
+	if (RHISupportsManualVertexFetch(Parameters.Platform))
+	{
+		OutEnvironment.SetDefineIfUnset(TEXT("MANUAL_VERTEX_FETCH"), TEXT("1"));
+	}
+
+	OutEnvironment.SetDefine(TEXT("RAY_TRACING_DYNAMIC_MESH_IN_LOCAL_SPACE"), TEXT("1"));
 }
 
 void FGeoVoronoiIndirectInstancingVertexFactory::ValidateCompiledResult(const FVertexFactoryType* Type, EShaderPlatform Platform, const FShaderParameterMap& ParameterMap, TArray<FString>& OutErrors)
 {
+	if (Type->SupportsPrimitiveIdStream()
+		&& UseGPUScene(Platform, GetMaxSupportedFeatureLevel(Platform))
+		&& !IsMobilePlatform(Platform)
+		&& ParameterMap.ContainsParameterAllocation(FPrimitiveUniformShaderParameters::FTypeInfo::GetStructMetadata()->GetShaderVariableName()))
+	{
+		OutErrors.AddUnique(*FString::Printf(
+			TEXT("Shader attempted to bind the Primitive uniform buffer even though Vertex Factory %s computes a PrimitiveId per-instance. Shaders should use GetPrimitiveData(...).Member instead of Primitive.Member."),
+			Type->GetName()));
+	}
 }
 
 // TODO update shader path when you create GeoVoronoi shader files
 IMPLEMENT_VERTEX_FACTORY_TYPE(FGeoVoronoiIndirectInstancingVertexFactory, "/IndirectInstancingCoreShaders/GeoVoronoiIndirectInstancingVertexFactory.ush",
-	EVertexFactoryFlags::UsedWithMaterials | EVertexFactoryFlags::SupportsDynamicLighting | EVertexFactoryFlags::SupportsPrimitiveIdStream);
+	EVertexFactoryFlags::UsedWithMaterials | EVertexFactoryFlags::SupportsDynamicLighting);

@@ -40,6 +40,7 @@ uint PageTableFeedbackId;
 uint NumPhysicalAddressBits;
 float4 PageTableSize;
 float4 PhysicalPageTransform;
+uint MaxInstances;
 
 float4 LodDistances;
 float LodBiasScale;
@@ -218,7 +219,7 @@ void CullInstancesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
  //   RWInstanceBuffer[Write] = OutInstance;
     
     uint TriangleId = DispatchThreadId.x;
-    if (TriangleId >= NumTriangles)
+    if (TriangleId >= NumTriangles || TriangleId >= MaxInstances)
         return;
 
     uint BaseIndex = TriangleId * 3;

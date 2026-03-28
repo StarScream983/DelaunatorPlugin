@@ -225,6 +225,11 @@ struct FVoronoiHalfEdge {
 	int32 Start_Face; // face index for HE_Start
 	int32 End_Face;  // face index for HE_End
 	// maybe add IDs of start and end into spherical triangles
+
+	FVoronoiHalfEdge() : VHE_Start(-1), VHE_End(-1), Start_Face(-1), End_Face(-1) {}
+	FVoronoiHalfEdge(int32 InStart, int32 InEnd, int32 InStartFace, int32 InEndFace)
+		: VHE_Start(InStart), VHE_End(InEnd), Start_Face(InStartFace), End_Face(InEndFace) {
+	}
 };
 
 

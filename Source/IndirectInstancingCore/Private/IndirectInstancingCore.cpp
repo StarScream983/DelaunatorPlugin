@@ -13,11 +13,7 @@
 		FString PluginShaderDir = FPaths::Combine(
 			IPluginManager::Get().FindPlugin(TEXT("DelaunatorPlugin"))->GetBaseDir(),
 			TEXT("Shaders/Private"));
-
-		if (!AllShaderSourceDirectoryMappings().Contains(TEXT("/IndirectInstancingCoreShaders")))
-		{
 			AddShaderSourceDirectoryMapping(TEXT("/IndirectInstancingCoreShaders"), PluginShaderDir);
-		}
 	}
 
 	void FIndirectInstancingCoreModule::ShutdownModule()

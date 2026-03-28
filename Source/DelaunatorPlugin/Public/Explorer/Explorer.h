@@ -41,7 +41,7 @@ class DELAUNATORPLUGIN_API AExplorer : public APawn, public IPawnInterface
 
 protected:
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Input, meta = (ClampMin = "0.0", UIMin = "0.0", ClampMax = "10.0", UIMax = "10.0"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = Input, meta = (ClampMin = "0.0", UIMin = "0.0", ClampMax = "10.0", UIMax = "10.0"))
 	float Speed = 1.f;
 
 public:	

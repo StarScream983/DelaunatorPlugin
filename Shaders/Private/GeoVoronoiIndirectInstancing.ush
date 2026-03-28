@@ -151,3 +151,36 @@ float3 ReconstructPosition(FVector3_HighLow v)
         v.Z.High + v.Z.Low
     );
 }
+
+uint GetTriangleId(QuadRenderInstance Item)
+{
+    return Item.PosLevelPacked;
+}
+
+float3 GetFibonacciPoint(uint Index)
+{
+    return ReconstructPosition(CBT_FibonacciPoints[Index]);
+}
+
+void GetTriangleVertices(uint TriId, out float3 V0, out float3 V1, out float3 V2)
+{
+    uint Base = TriId * 3;
+    V0 = GetFibonacciPoint((uint)CBT_SphericalTriangles[Base + 0]);
+    V1 = GetFibonacciPoint((uint)CBT_SphericalTriangles[Base + 1]);
+    V2 = GetFibonacciPoint((uint)CBT_SphericalTriangles[Base + 2]);
+
+    // Force a stable outward winding for sphere rendering.
+    const float3 FaceNormal = cross(V1 - V0, V2 - V0);
+    const float3 TriangleCentroid = V0 + V1 + V2;
+    if (dot(FaceNormal, TriangleCentroid) < 0.0f)
+    {
+        const float3 Temp = V1;
+        V1 = V2;
+        V2 = Temp;
+    }
+}
+
+float3 GetTriangleNormal(float3 V0, float3 V1, float3 V2)
+{
+    return normalize(cross(V1 - V0, V2 - V0));
+}
