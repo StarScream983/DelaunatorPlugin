@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/ActorComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Delaunator.h"
 #include <sleef.h>
 #include <functional>
@@ -12,6 +12,7 @@
 #include "GeoDelaunatorComponent.generated.h"
 
 class FCBTResource_Interface;
+class UMaterialInterface;
 
 #define _PI UE_DOUBLE_PI
 #define _TAU UE_DOUBLE_TWO_PI
@@ -226,10 +227,11 @@ struct FVoronoiHalfEdge {
 	// maybe add IDs of start and end into spherical triangles
 };
 
-UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
-class DELAUNATORPLUGIN_API UGeoDelaunatorComponent : public UActorComponent
+
+UCLASS(Blueprintable, ClassGroup = (Custom), meta = (BlueprintSpawnableComponent), hideCategories = (Activation, Collision, Cooking, HLOD, Navigation, Object, Physics, VirtualTexture))
+class DELAUNATORPLUGIN_API UGeoDelaunatorComponent : public UPrimitiveComponent
 {
-	GENERATED_BODY()
+	GENERATED_UCLASS_BODY()
 
 public:	
 	// Sets default values for this component's properties
@@ -243,6 +245,45 @@ protected:
 	virtual void BeginDestroy() override; // better to release the CBTResources
 
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+
+	/*****************************************************************************
+	*                                                                           *
+	*              INDIRECT INSTANCING PRIMITIVE COMPONENT                       *
+	*                                                                           *
+	*  Material, SceneProxy, Bounds, and UPrimitiveComponent overrides needed    *
+	*  for indirect instanced rendering via FDelaunatorIndirectInstancingSceneProxy. *
+	*                                                                           *
+	*****************************************************************************/
+protected:
+	/** Material applied to each instance. */
+	UPROPERTY(EditAnywhere, Category = Rendering)
+	UMaterialInterface* Material = nullptr;
+
+public:
+	UMaterialInterface* GetMaterial() const { return Material; }
+protected:
+	//~ Begin UActorComponent Interface
+	virtual void OnRegister() override;
+	virtual void OnUnregister() override;
+	virtual void ApplyWorldOffset(const FVector& InOffset, bool bWorldShift) override;
+	//~ End UActorComponent Interface
+
+	//~ Begin USceneComponent Interface
+	virtual bool IsVisible() const override;
+	virtual FBoxSphereBounds CalcBounds(const FTransform& LocalToWorld) const override;
+	//~ End USceneComponent Interface
+
+	//~ Begin UPrimitiveComponent Interface
+	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
+	virtual bool SupportsStaticLighting() const override { return true; }
+	virtual void SetMaterial(int32 ElementIndex, class UMaterialInterface* InMaterial) override;
+	virtual UMaterialInterface* GetMaterial(int32 Index) const override { return Material; }
+	virtual void GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials, bool bGetDebugMaterials = false) const override;
+	//~ End UPrimitiveComponent Interface
+	/*****************************************************************************
+	*          END INDIRECT INSTANCING PRIMITIVE COMPONENT                       *
+	*****************************************************************************/
 
 protected:
 
@@ -307,9 +348,10 @@ protected:
 	/*int32 AllocationCounter_Buffer = 0;
 	TArray<FPointer_CBT> Pointer_Buffer;*/
 
-	TUniquePtr<FCBTResource_Interface> CBTResources;
+	TSharedPtr<FCBTResource_Interface> CBTResources;
 public:
 	FORCEINLINE float GetPlanetRadius() const { return (float)PlanetRadius; }
+	FORCEINLINE TSharedPtr<FCBTResource_Interface> GetCBTResources() const { return CBTResources; }
 
 public:
 	

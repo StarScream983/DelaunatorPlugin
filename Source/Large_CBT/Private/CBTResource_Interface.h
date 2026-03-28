@@ -46,6 +46,20 @@ private:
 	FRWBufferStructured Pointer_Buffer;
 
 public:
+	/** Returns true if InitRHI has been called (render resource is initialized). */
+	bool IsInitialized() const { return IsGPUReady(); }
+
+	// GPU Buffer Accessors
+	FORCEINLINE FShaderResourceViewRHIRef GetFibonacciPointsSRV() const { return FibonacciPoints_Buffer.SRV; }
+	FORCEINLINE FShaderResourceViewRHIRef GetSphericalTrianglesSRV() const { return SphericalTriangles_Buffer.SRV; }
+
+	/** Returns true if the two required GPU buffers have been initialized. */
+	FORCEINLINE bool IsGPUReady() const { return FibonacciPoints_Buffer.SRV.IsValid() && SphericalTriangles_Buffer.SRV.IsValid(); }
+
+	/** Returns the number of Fibonacci sphere vertices uploaded to the GPU. */
+	FORCEINLINE uint32 GetNumFibonacciPoints() const { return static_cast<uint32>(CPU_FibonacciPoints_Buffer.Num()); }
+	/** Returns the number of spherical triangles (flat indices / 3). */
+	FORCEINLINE uint32 GetNumTriangles() const { return static_cast<uint32>(CPU_SphericalTriangles_Buffer.Num() / 3); }
 
 	// Prime Triangle CPU Buffers
 	void PrimeTrianglesBuffers(const TArray<FVector3_HighLow>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges);
