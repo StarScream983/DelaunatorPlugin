@@ -226,7 +226,7 @@ void CullInstancesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
     uint Index1 = (uint) CBT_SphericalTriangles[BaseIndex + 1];
     uint Index2 = (uint) CBT_SphericalTriangles[BaseIndex + 2];
 
-    // Bounds check � skip corrupt or out-of-range triangle indices
+    // Bounds check / skip corrupt or out-of-range triangle indices
     if (Index0 >= NumVertices || Index1 >= NumVertices || Index2 >= NumVertices)
         return;
 
