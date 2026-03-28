@@ -3,7 +3,7 @@
 
 #include "GeoDelaunatorComponent.h"
 #include "CBTResource_Interface.h"
-//#include "IndirectInstancingSceneProxy.h"
+#include "IndirectInstancingSceneProxy.h"
 #include <string>
 #include <iostream>
 #include "Interfaces/IPluginManager.h"
@@ -68,8 +68,7 @@ FBoxSphereBounds UGeoDelaunatorComponent::CalcBounds(const FTransform& LocalToWo
 
 FPrimitiveSceneProxy* UGeoDelaunatorComponent::CreateSceneProxy()
 {
-	return nullptr; // for debug only
-	//return new FGeoVoronoiIndirectInstancingSceneProxy(this);
+	return new FGeoVoronoiIndirectInstancingSceneProxy(this);
 }
 
 void UGeoDelaunatorComponent::SetMaterial(int32 InElementIndex, UMaterialInterface* InMaterial)

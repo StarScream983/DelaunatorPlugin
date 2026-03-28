@@ -16,9 +16,14 @@
 	"Installed": false,
 	"Modules": [
 		{
+		"Name": "IndirectInstancingCore",
+		"Type": "Runtime",
+		"LoadingPhase": "PostConfigInit"
+		},
+		{
 			"Name": "Large_CBT",
 			"Type": "Runtime",
-			"LoadingPhase": "PostConfigInit"
+			"LoadingPhase": "Default"
 		},
 		{
 			"Name": "DelaunatorPlugin",

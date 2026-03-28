@@ -235,7 +235,7 @@ class DELAUNATORPLUGIN_API UGeoDelaunatorComponent : public UPrimitiveComponent
 
 public:	
 	// Sets default values for this component's properties
-	UGeoDelaunatorComponent();
+	//UGeoDelaunatorComponent();
 
 protected:
 

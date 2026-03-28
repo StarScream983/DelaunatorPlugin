@@ -130,6 +130,8 @@ struct FHighLow_Pair
     float Low;
 };
 
+// Matches CPU FVector3_HighLow { FHighLow_Pair X; Y; Z; }
+// Memory layout per element: [ X.High, X.Low, Y.High, Y.Low, Z.High, Z.Low ]
 struct FVector3_HighLow
 {
     FHighLow_Pair X;

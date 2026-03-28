@@ -18,7 +18,7 @@ class DELAUNATORPLUGIN_API APlanetPrototype : public AActor
 
 protected:
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "PrototypePlanet")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"), Category = "PrototypePlanet")
 	UGeoDelaunatorComponent* VoronoiPlanet;
 
 	// Gravity Volume to detect the character

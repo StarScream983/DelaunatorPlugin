@@ -3,7 +3,7 @@
 
 #include "/Engine/Private/VertexFactoryCommon.ush"
 #include "/Engine/Private/VirtualTextureCommon.ush"
-#include "IndirectInstancing.ush"
+#include "GeoVoronoiIndirectInstancing.ush"
 
 StructuredBuffer<QuadRenderInstance> InstanceBuffer;
 float3 LodViewOrigin;

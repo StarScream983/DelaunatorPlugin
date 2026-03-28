@@ -5,7 +5,7 @@
 #include "/Engine/Private/MortonCode.ush"
 //#include "/Engine/Private/ShaderPrintCommon.ush"
 //#include "/Engine/Private/ShaderDrawDebug.ush"
-#include "ExampleIndirectInstancing.ush"
+#include "GeoVoronoiIndirectInstancing.ush"
 
 groupshared uint NumGroupTasks;
 globallycoherent RWStructuredBuffer<WorkerQueueInfo> RWQueueInfo;

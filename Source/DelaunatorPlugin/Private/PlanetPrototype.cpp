@@ -13,8 +13,8 @@ APlanetPrototype::APlanetPrototype()
 	PrimaryActorTick.bCanEverTick = true;
 	bGenerateOverlapEventsDuringLevelStreaming = true;
 
-	RootComponent = CreateDefaultSubobject<USceneComponent>(FName("RootComponent"));
-	VoronoiPlanet = CreateDefaultSubobject<UGeoDelaunatorComponent>(FName("VoronoiPlanet"));
+	//RootComponent = CreateDefaultSubobject<USceneComponent>(FName("RootComponent"));
+	RootComponent = VoronoiPlanet = CreateDefaultSubobject<UGeoDelaunatorComponent>(FName("VoronoiPlanet"));
 	
 	float radius = (float)GravityVolumeRadius;
 	if(VoronoiPlanet)
