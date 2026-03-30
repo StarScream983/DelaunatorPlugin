@@ -23,6 +23,12 @@ private:
 	TArray<int32> CPU_SphericalTriangles_Buffer; // flat array
 	TArray<int32> CPU_SphericalTriangles_HalfEdges_Buffer;
 
+	// CPU VORONOI BUFFERS
+	TArray<FVector3_HighLow> CPU_VoronoiGeoCenters_Buffer;
+	TArray<FUintVector2> CPU_VoronoiGeoMesh_Ranges_Buffer;
+	TArray<int32> CPU_VoronoiGeoMesh_Flat_Buffer;
+	TArray<uint32> CPU_Voronoi_Cells_Color_Buffer;
+
 	// CPU CBT BUFFERS
 	int32 D{ 0 };
 	TArray<FHalfEdge_CBT> CPUHalfEdge_Buffer;
@@ -36,6 +42,18 @@ private:
 	FRWBufferStructured FibonacciPoints_Buffer;
 	FRWBufferStructured SphericalTriangles_Buffer;
 	FRWBufferStructured SphericalTriangles_HalfEdges_Buffer;
+
+	// GPU VORONOI BUFFERS
+	FRWBufferStructured VoronoiGeoCenters_Buffer;
+
+	FBufferRHIRef VoronoiGeoMesh_Ranges_Buffer;
+	FShaderResourceViewRHIRef VoronoiGeoMesh_Ranges_SRV;
+
+	FBufferRHIRef VoronoiGeoMesh_Flat_Buffer;
+	FShaderResourceViewRHIRef VoronoiGeoMesh_Flat_SRV;
+
+	FBufferRHIRef VoronoiCellColors_Buffer;
+	FShaderResourceViewRHIRef VoronoiCellColors_SRV;
 
 	// GPU CBT buffers
 	FRWBufferStructured HalfEdges_Buffer;     // StructuredBuffer<FHalfEdge_CBT>
@@ -52,6 +70,10 @@ public:
 	// GPU Buffer Accessors
 	FORCEINLINE FShaderResourceViewRHIRef GetFibonacciPointsSRV() const { return FibonacciPoints_Buffer.SRV; }
 	FORCEINLINE FShaderResourceViewRHIRef GetSphericalTrianglesSRV() const { return SphericalTriangles_Buffer.SRV; }
+	FORCEINLINE FShaderResourceViewRHIRef GetVoronoiGeoCentersSRV() const { return VoronoiGeoCenters_Buffer.SRV; }
+	FORCEINLINE FShaderResourceViewRHIRef GetVoronoiGeoMeshRangesSRV() const { return VoronoiGeoMesh_Ranges_SRV; }
+	FORCEINLINE FShaderResourceViewRHIRef GetVoronoiGeoMeshFlatSRV() const { return VoronoiGeoMesh_Flat_SRV; }
+	FORCEINLINE FShaderResourceViewRHIRef GetVoronoiCellColorsSRV() const { return VoronoiCellColors_SRV; }
 
 	/** Returns true if the two required GPU buffers have been initialized. */
 	FORCEINLINE bool IsGPUReady() const { return FibonacciPoints_Buffer.SRV.IsValid() && SphericalTriangles_Buffer.SRV.IsValid(); }
@@ -61,6 +83,8 @@ public:
 	/** Returns the number of spherical triangles (flat indices / 3). */
 	FORCEINLINE uint32 GetNumTriangles() const { return static_cast<uint32>(CPU_SphericalTriangles_Buffer.Num() / 3); }
 
+	// Push Colors to buffer for Voronoi cells
+	void PrimeVoronoiBuffers(const TArray<FVector3_HighLow>& InVoronoiGeoMeshCenters, const TArray<FUintVector2>& InVoronoiGeoMesh_Ranges, const TArray<int32>& InVoronoiGeoMesh_Flat, const TArray<uint32>& InVoronoiCellColors);
 	// Prime Triangle CPU Buffers
 	void PrimeTrianglesBuffers(const TArray<FVector3_HighLow>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges);
 	// Init from CPU arrays (call from game thread)
@@ -78,6 +102,11 @@ private:
 	void UploadFibonacciPointsToGPU();
 	void UploadSphericalTrianglesToGPU();
 	void UploadSphericalTrianglesHalfEdgesBufferToGPU();
+
+	void UploadVoronoiGeoCentersToGPU();
+	void UploadVoronoiGeoMeshRangesToGPU();
+	void UploadVoronoiGeoMeshFlatToGPU();
+	void UploadVoronoiCellColorsToGPU();
 
 	void UploadHalfEdgesToGPU();
 	void UploadVertexBufferToGPU();

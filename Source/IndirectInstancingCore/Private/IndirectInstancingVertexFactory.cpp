@@ -58,6 +58,11 @@ public:
 		LodViewOriginParameter.Bind(ParameterMap, TEXT("LodViewOrigin"));
 		CBT_FibonacciPointsParameter.Bind(ParameterMap, TEXT("CBT_FibonacciPoints"));
 		CBT_SphericalTrianglesParameter.Bind(ParameterMap, TEXT("CBT_SphericalTriangles"));
+
+		VoronoiGeoCentersParameter.Bind(ParameterMap, TEXT("VoronoiGeoCenters"));
+		VoronoiGeoMeshRangesParameter.Bind(ParameterMap, TEXT("VoronoiGeoMeshRanges"));
+		VoronoiGeoMeshFlatParameter.Bind(ParameterMap, TEXT("VoronoiGeoMeshFlat"));
+		VoronoiCellColorsParameter.Bind(ParameterMap, TEXT("VoronoiCellColors"));
 	}
 
 	void GetElementShaderBindings(
@@ -86,6 +91,22 @@ public:
 		{
 			ShaderBindings.Add(CBT_SphericalTrianglesParameter, UserData->CBT_SphericalTrianglesSRV);
 		}
+		if (VoronoiGeoCentersParameter.IsBound() && UserData->VoronoiGeoCentersSRV)
+		{
+			ShaderBindings.Add(VoronoiGeoCentersParameter, UserData->VoronoiGeoCentersSRV);
+		}
+		if (VoronoiGeoMeshRangesParameter.IsBound() && UserData->VoronoiGeoMeshRangesSRV)
+		{
+			ShaderBindings.Add(VoronoiGeoMeshRangesParameter, UserData->VoronoiGeoMeshRangesSRV);
+		}
+		if (VoronoiGeoMeshFlatParameter.IsBound() && UserData->VoronoiGeoMeshFlatSRV)
+		{
+			ShaderBindings.Add(VoronoiGeoMeshFlatParameter, UserData->VoronoiGeoMeshFlatSRV);
+		}
+		if (VoronoiCellColorsParameter.IsBound() && UserData->VoronoiCellColorsSRV)
+		{
+			ShaderBindings.Add(VoronoiCellColorsParameter, UserData->VoronoiCellColorsSRV);
+		}
 	}
 
 protected:
@@ -93,6 +114,10 @@ protected:
 	LAYOUT_FIELD(FShaderParameter, LodViewOriginParameter);
 	LAYOUT_FIELD(FShaderResourceParameter, CBT_FibonacciPointsParameter);
 	LAYOUT_FIELD(FShaderResourceParameter, CBT_SphericalTrianglesParameter);
+	LAYOUT_FIELD(FShaderResourceParameter, VoronoiGeoCentersParameter);
+	LAYOUT_FIELD(FShaderResourceParameter, VoronoiGeoMeshRangesParameter);
+	LAYOUT_FIELD(FShaderResourceParameter, VoronoiGeoMeshFlatParameter);
+	LAYOUT_FIELD(FShaderResourceParameter, VoronoiCellColorsParameter);
 };
 
 IMPLEMENT_TYPE_LAYOUT(FGeoVoronoiIndirectInstancingShaderParameters);

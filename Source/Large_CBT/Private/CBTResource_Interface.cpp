@@ -5,6 +5,25 @@
 #include "RenderCore.h"
 #include "RHI.h"
 
+void FCBTResource_Interface::PrimeVoronoiBuffers(const TArray<FVector3_HighLow>& InVoronoiGeoMeshCenters, const TArray<FUintVector2>& InVoronoiGeoMesh_Ranges, const TArray<int32>& InVoronoiGeoMesh_Flat, const TArray<uint32>& InVoronoiCellColors)
+{
+	CPU_VoronoiGeoCenters_Buffer.Empty();
+	CPU_VoronoiGeoMesh_Ranges_Buffer.Empty();
+	CPU_VoronoiGeoMesh_Flat_Buffer.Empty();
+	CPU_Voronoi_Cells_Color_Buffer.Empty();
+
+	CPU_VoronoiGeoCenters_Buffer = InVoronoiGeoMeshCenters;
+	CPU_VoronoiGeoMesh_Ranges_Buffer = InVoronoiGeoMesh_Ranges;
+	CPU_VoronoiGeoMesh_Flat_Buffer = InVoronoiGeoMesh_Flat;
+	CPU_Voronoi_Cells_Color_Buffer = InVoronoiCellColors;
+
+	/*UE_LOG(LogTemp, Warning, TEXT("PrimeVoronoiBuffers: Centers=%d Ranges=%d Flat=%d Colors=%d"),
+		InVoronoiGeoMeshCenters.Num(),
+		InVoronoiGeoMesh_Ranges.Num(),
+		InVoronoiGeoMesh_Flat.Num(),
+		InVoronoiCellColors.Num());*/
+}
+
 void FCBTResource_Interface::PrimeTrianglesBuffers(const TArray<FVector3_HighLow>& InFibonacciPoints, const TArray<int32>& InSphericalTriangles, const TArray<int32>& InSphericalTrianglesHalfEdges)
 {
     CPU_FibonacciPoints_Buffer.Empty();
@@ -88,6 +107,95 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
         );
         UploadSphericalTrianglesHalfEdgesBufferToGPU();
     }
+
+	// UPLOAD VORONOI BUFFERS
+
+	if (CPU_VoronoiGeoCenters_Buffer.Num() > 0)
+	{
+		VoronoiGeoCenters_Buffer.Initialize(
+			RHICmdList,
+			TEXT("LargeCBT_VoronoiGeoCenters_Buffer"),
+			sizeof(FVector3_HighLow),
+			(uint32)CPU_VoronoiGeoCenters_Buffer.Num(),
+			BUF_ShaderResource,
+			/*bUseUAVCounter=*/false,
+			/*bAppendBuffer=*/false,
+			ERHIAccess::SRVMask
+		);
+
+		UploadVoronoiGeoCentersToGPU();
+	}
+
+	if (CPU_VoronoiGeoMesh_Ranges_Buffer.Num() > 0)
+	{
+		const uint32 NumBytes = CPU_VoronoiGeoMesh_Ranges_Buffer.Num() * sizeof(FUintVector2);
+		FRHIResourceCreateInfo CreateInfo(TEXT("LargeCBT_VoronoiGeoMesh_Ranges_Buffer"));
+
+		VoronoiGeoMesh_Ranges_Buffer = RHICmdList.CreateStructuredBuffer(
+			sizeof(FUintVector2),
+			NumBytes,
+			BUF_ShaderResource | BUF_Static,
+			ERHIAccess::SRVMask,
+			CreateInfo);
+
+		VoronoiGeoMesh_Ranges_SRV = RHICmdList.CreateShaderResourceView(VoronoiGeoMesh_Ranges_Buffer);
+
+		/*UE_LOG(LogTemp, Warning, TEXT("Create VoronoiGeoMeshRanges: BufferValid=%d SRVValid=%d Num=%d Bytes=%u"),
+			VoronoiGeoMesh_Ranges_Buffer.IsValid() ? 1 : 0,
+			VoronoiGeoMesh_Ranges_SRV.IsValid() ? 1 : 0,
+			CPU_VoronoiGeoMesh_Ranges_Buffer.Num(),
+			NumBytes);*/
+
+		UploadVoronoiGeoMeshRangesToGPU();
+	}
+
+	if (CPU_VoronoiGeoMesh_Flat_Buffer.Num() > 0)
+	{
+		const uint32 NumBytes = CPU_VoronoiGeoMesh_Flat_Buffer.Num() * sizeof(int32);
+		FRHIResourceCreateInfo CreateInfo(TEXT("LargeCBT_VoronoiGeoMesh_Flat_Buffer"));
+
+		VoronoiGeoMesh_Flat_Buffer = RHICmdList.CreateStructuredBuffer(
+			sizeof(int32),
+			NumBytes,
+			BUF_ShaderResource | BUF_Static,
+			ERHIAccess::SRVMask,
+			CreateInfo);
+
+		VoronoiGeoMesh_Flat_SRV = RHICmdList.CreateShaderResourceView(VoronoiGeoMesh_Flat_Buffer);
+
+		/*UE_LOG(LogTemp, Warning, TEXT("Create VoronoiGeoMeshFlat: BufferValid=%d SRVValid=%d Num=%d Bytes=%u"),
+			VoronoiGeoMesh_Flat_Buffer.IsValid() ? 1 : 0,
+			VoronoiGeoMesh_Flat_SRV.IsValid() ? 1 : 0,
+			CPU_VoronoiGeoMesh_Flat_Buffer.Num(),
+			NumBytes);*/
+
+		UploadVoronoiGeoMeshFlatToGPU();
+	}
+
+	if (CPU_Voronoi_Cells_Color_Buffer.Num() > 0)
+	{
+		const uint32 NumBytes = CPU_Voronoi_Cells_Color_Buffer.Num() * sizeof(uint32);
+		FRHIResourceCreateInfo CreateInfo(TEXT("LargeCBT_VoronoiCellColors_Buffer"));
+
+		VoronoiCellColors_Buffer = RHICmdList.CreateVertexBuffer(
+			NumBytes,
+			BUF_ShaderResource | BUF_Static,
+			ERHIAccess::SRVMask,
+			CreateInfo);
+
+		VoronoiCellColors_SRV = RHICmdList.CreateShaderResourceView(
+			VoronoiCellColors_Buffer,
+			sizeof(uint32),
+			PF_R32_UINT);
+
+		/*UE_LOG(LogTemp, Warning, TEXT("Create VoronoiCellColors: BufferValid=%d SRVValid=%d Num=%d Bytes=%u"),
+			VoronoiCellColors_Buffer.IsValid() ? 1 : 0,
+			VoronoiCellColors_SRV.IsValid() ? 1 : 0,
+			CPU_Voronoi_Cells_Color_Buffer.Num(),
+			NumBytes);*/
+
+		UploadVoronoiCellColorsToGPU();
+	}
     
     // UPLOAD CBT BUFFERS
     if (CPUHalfEdge_Buffer.Num() > 0)
@@ -190,6 +298,12 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
         );
         UploadPointerBufferToGPU();
     }
+
+	/*UE_LOG(LogTemp, Warning, TEXT("InitRHI Voronoi Counts: Centers=%d Ranges=%d Flat=%d Colors=%d"),
+		CPU_VoronoiGeoCenters_Buffer.Num(),
+		CPU_VoronoiGeoMesh_Ranges_Buffer.Num(),
+		CPU_VoronoiGeoMesh_Flat_Buffer.Num(),
+		CPU_Voronoi_Cells_Color_Buffer.Num());*/
 }
 
 void FCBTResource_Interface::ReleaseRHI()
@@ -197,6 +311,15 @@ void FCBTResource_Interface::ReleaseRHI()
     FibonacciPoints_Buffer.Release();
     SphericalTriangles_Buffer.Release();
     SphericalTriangles_HalfEdges_Buffer.Release();
+
+    VoronoiCellColors_SRV.SafeRelease();
+    VoronoiCellColors_Buffer.SafeRelease();
+
+	VoronoiGeoMesh_Ranges_SRV.SafeRelease();
+	VoronoiGeoMesh_Ranges_Buffer.SafeRelease();
+
+	VoronoiGeoMesh_Flat_SRV.SafeRelease();
+	VoronoiGeoMesh_Flat_Buffer.SafeRelease();
 
 	HalfEdges_Buffer.Release();
 	Vertex_Buffer.Release();
@@ -223,8 +346,8 @@ void FCBTResource_Interface::UploadFibonacciPointsToGPU()
     FMemory::Memcpy(Dest, CPU_FibonacciPoints_Buffer.GetData(), NumBytes);
     RHIUnlockBuffer(FibonacciPoints_Buffer.Buffer);
 
-    UE_LOG(LogTemp, Warning, TEXT("Uploaded %d Fibonacci points (%.2f MB) to GPU"),
-        CPU_FibonacciPoints_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));
+    /*UE_LOG(LogTemp, Warning, TEXT("Uploaded %d Fibonacci points (%.2f MB) to GPU"),
+        CPU_FibonacciPoints_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));*/
 }
 
 void FCBTResource_Interface::UploadSphericalTrianglesToGPU()
@@ -244,8 +367,8 @@ void FCBTResource_Interface::UploadSphericalTrianglesToGPU()
     FMemory::Memcpy(Dest, CPU_SphericalTriangles_Buffer.GetData(), NumBytes);
     RHIUnlockBuffer(SphericalTriangles_Buffer.Buffer);
 
-    UE_LOG(LogTemp, Warning, TEXT("Uploaded %d spherical triangle indices (%.2f MB) to GPU"),
-        CPU_SphericalTriangles_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));
+    /*UE_LOG(LogTemp, Warning, TEXT("Uploaded %d spherical triangle indices (%.2f MB) to GPU"),
+        CPU_SphericalTriangles_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));*/
 }
 
 void FCBTResource_Interface::UploadSphericalTrianglesHalfEdgesBufferToGPU()
@@ -265,8 +388,112 @@ void FCBTResource_Interface::UploadSphericalTrianglesHalfEdgesBufferToGPU()
     FMemory::Memcpy(Dest, CPU_SphericalTriangles_HalfEdges_Buffer.GetData(), NumBytes);
     RHIUnlockBuffer(SphericalTriangles_HalfEdges_Buffer.Buffer);
 
-    UE_LOG(LogTemp, Warning, TEXT("Uploaded %d half-edge indices (%.2f MB) to GPU"),
-        CPU_SphericalTriangles_HalfEdges_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));
+    /*UE_LOG(LogTemp, Warning, TEXT("Uploaded %d half-edge indices (%.2f MB) to GPU"),
+        CPU_SphericalTriangles_HalfEdges_Buffer.Num(), NumBytes / (1024.0f * 1024.0f));*/
+}
+
+void FCBTResource_Interface::UploadVoronoiGeoCentersToGPU()
+{
+	/*UE_LOG(LogTemp, Warning, TEXT("UploadVoronoiGeoCentersToGPU: BufferValid=%d Num=%d"),
+		VoronoiGeoCenters_Buffer.IsValid() ? 1 : 0,
+		CPU_VoronoiGeoCenters_Buffer.Num());*/
+
+	if (!VoronoiGeoCenters_Buffer.Buffer || CPU_VoronoiGeoCenters_Buffer.Num() == 0)
+	{
+		return;
+	}
+
+	const uint32 NumBytes = CPU_VoronoiGeoCenters_Buffer.Num() * sizeof(FVector3_HighLow);
+
+	void* Dest = RHILockBuffer(
+		VoronoiGeoCenters_Buffer.Buffer,
+		0,
+		NumBytes,
+		RLM_WriteOnly);
+
+	FMemory::Memcpy(Dest, CPU_VoronoiGeoCenters_Buffer.GetData(), NumBytes);
+	RHIUnlockBuffer(VoronoiGeoCenters_Buffer.Buffer);
+}
+
+void FCBTResource_Interface::UploadVoronoiGeoMeshRangesToGPU()
+{
+	/*UE_LOG(LogTemp, Warning, TEXT("UploadVoronoiGeoMeshRangesToGPU: BufferValid=%d Num=%d"),
+		VoronoiGeoMesh_Ranges_Buffer.IsValid() ? 1 : 0,
+		CPU_VoronoiGeoMesh_Ranges_Buffer.Num());*/
+
+	if (!VoronoiGeoMesh_Ranges_Buffer.IsValid() || CPU_VoronoiGeoMesh_Ranges_Buffer.Num() == 0)
+	{
+		return;
+	}
+
+	const uint32 NumBytes = CPU_VoronoiGeoMesh_Ranges_Buffer.Num() * sizeof(FUintVector2);
+
+	void* Dest = RHILockBuffer(
+		VoronoiGeoMesh_Ranges_Buffer,
+		0,
+		NumBytes,
+		RLM_WriteOnly);
+
+	FMemory::Memcpy(Dest, CPU_VoronoiGeoMesh_Ranges_Buffer.GetData(), NumBytes);
+	RHIUnlockBuffer(VoronoiGeoMesh_Ranges_Buffer);
+
+	/*UE_LOG(LogTemp, Warning, TEXT("Uploaded VoronoiGeoMeshRanges: Num=%d Bytes=%u"),
+		CPU_VoronoiGeoMesh_Ranges_Buffer.Num(),
+		NumBytes);*/
+}
+
+void FCBTResource_Interface::UploadVoronoiGeoMeshFlatToGPU()
+{
+	/*UE_LOG(LogTemp, Warning, TEXT("UploadVoronoiGeoMeshFlatToGPU: BufferValid=%d Num=%d"),
+		VoronoiGeoMesh_Flat_Buffer.IsValid() ? 1 : 0,
+		CPU_VoronoiGeoMesh_Flat_Buffer.Num());*/
+
+	if (!VoronoiGeoMesh_Flat_Buffer.IsValid() || CPU_VoronoiGeoMesh_Flat_Buffer.Num() == 0)
+	{
+		return;
+	}
+
+	const uint32 NumBytes = CPU_VoronoiGeoMesh_Flat_Buffer.Num() * sizeof(int32);
+
+	void* Dest = RHILockBuffer(
+		VoronoiGeoMesh_Flat_Buffer,
+		0,
+		NumBytes,
+		RLM_WriteOnly);
+
+	FMemory::Memcpy(Dest, CPU_VoronoiGeoMesh_Flat_Buffer.GetData(), NumBytes);
+	RHIUnlockBuffer(VoronoiGeoMesh_Flat_Buffer);
+
+	/*UE_LOG(LogTemp, Warning, TEXT("Uploaded VoronoiGeoMeshFlat: Num=%d Bytes=%u"),
+		CPU_VoronoiGeoMesh_Flat_Buffer.Num(),
+		NumBytes);*/
+}
+
+void FCBTResource_Interface::UploadVoronoiCellColorsToGPU()
+{
+	/*UE_LOG(LogTemp, Warning, TEXT("UploadVoronoiCellColorsToGPU: BufferValid=%d Num=%d"),
+		VoronoiCellColors_Buffer.IsValid() ? 1 : 0,
+		CPU_Voronoi_Cells_Color_Buffer.Num());*/
+
+	if (!VoronoiCellColors_Buffer.IsValid() || CPU_Voronoi_Cells_Color_Buffer.Num() == 0)
+	{
+		return;
+	}
+
+	const uint32 NumBytes = CPU_Voronoi_Cells_Color_Buffer.Num() * sizeof(uint32);
+
+	void* Dest = RHILockBuffer(
+		VoronoiCellColors_Buffer,
+		0,
+		NumBytes,
+		RLM_WriteOnly);
+
+	FMemory::Memcpy(Dest, CPU_Voronoi_Cells_Color_Buffer.GetData(), NumBytes);
+	RHIUnlockBuffer(VoronoiCellColors_Buffer);
+
+	/*UE_LOG(LogTemp, Warning, TEXT("Uploaded VoronoiCellColors: Num=%d Bytes=%u"),
+		CPU_Voronoi_Cells_Color_Buffer.Num(),
+		NumBytes);*/
 }
 
 void FCBTResource_Interface::UploadHalfEdgesToGPU()

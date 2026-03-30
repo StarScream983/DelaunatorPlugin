@@ -211,6 +211,10 @@ struct FGeoPolygonResult {
 	TArray<TArray<int32>> Polygons; // site index -> list of CCW triangle indices (into Circumcenters)
 	TArray<FVector3d> Centers; // final augmented circumcenters
 	TArray<FVector3_HighLow> Centers_HL; // final augmented circumcenters_HL for GPU
+
+	// GPU FRIENDLY GEO MESH
+	TArray<FUintVector2> VoronoiGeoMesh_Ranges;
+	TArray<int32> VoronoiGeoMesh_Flat;
 };
 
 // STRUCT TO HOLD REVERSE HALF-EDGE MAPPING
@@ -321,6 +325,7 @@ protected:
 
 	TArray<FVector2D> LonLat;
 	TArray<FVector> FibonacciPoints; // BUFFER FOR TRIANGLES VERTICES
+	TArray<uint32> VoronoiCellColors; // random colors for Voronoi cells, generated on CPU and sent to GPU for rendering
 	TArray<FVector3_HighLow> FibonacciPoints_HL; // HIGH-LOW BUFFER FOR GPU TRIANGLE VERTICES
 	std::vector<double> coords; // FOR DELAUNAYTOR
 	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
@@ -344,6 +349,10 @@ protected:
 	TArray<TArray<int32>> VoronoiGeoMesh; // site index -> list of CCW triangle indices into Voronoi Sites (AKA VoronoiGeoCenters)
 	TArray<FVector> VoronoiGeoCenters; // CBT VERTEX BUFFER --- a copy of circumcenters, possibly with extra points appended — they are the same base data.But centers can grow later
 	TArray<FVector3_HighLow> VoronoiGeoCenters_HL; // HIGH-LOW BUFFER FOR GPU VORONOI GEO CENTERS
+
+	// VORONOI GEO MESH FLAT - GPU FRIENDLY
+	TArray<FUintVector2> VoronoiGeoMesh_Ranges;
+	TArray<int32> VoronoiGeoMesh_Flat;
 
 	// CBT STRUCTURE
 	uint32 D{ 16 }; // CBT Depth

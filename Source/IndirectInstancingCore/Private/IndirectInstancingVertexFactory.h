@@ -31,6 +31,12 @@ struct FGeoVoronoiIndirectInstancingUserData : public FOneFrameResource
 	// CBT buffers needed by the vertex factory to reconstruct triangle vertices
 	FRHIShaderResourceView* CBT_FibonacciPointsSRV = nullptr;
 	FRHIShaderResourceView* CBT_SphericalTrianglesSRV = nullptr;
+
+	// Voronoi buffers
+	FRHIShaderResourceView* VoronoiGeoCentersSRV = nullptr;
+	FRHIShaderResourceView* VoronoiGeoMeshRangesSRV = nullptr;
+	FRHIShaderResourceView* VoronoiGeoMeshFlatSRV = nullptr;
+	FRHIShaderResourceView* VoronoiCellColorsSRV = nullptr;
 };
 
 /*

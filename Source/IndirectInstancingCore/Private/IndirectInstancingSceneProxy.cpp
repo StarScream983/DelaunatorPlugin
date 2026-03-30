@@ -387,11 +387,19 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 		UserData->InstanceBufferSRV = DrawBuffers.InstanceBufferSRV;
 		UserData->CBT_FibonacciPointsSRV = nullptr;
 		UserData->CBT_SphericalTrianglesSRV = nullptr;
+		UserData->VoronoiGeoCentersSRV = nullptr;
+		UserData->VoronoiGeoMeshRangesSRV = nullptr;
+		UserData->VoronoiGeoMeshFlatSRV = nullptr;
+		UserData->VoronoiCellColorsSRV = nullptr;
 
 		if (CBTResources.IsValid() && CBTResources->IsGPUReady())
 		{
 			UserData->CBT_FibonacciPointsSRV = CBTResources->GetFibonacciPointsSRV();
 			UserData->CBT_SphericalTrianglesSRV = CBTResources->GetSphericalTrianglesSRV();
+			UserData->VoronoiGeoCentersSRV = CBTResources->GetVoronoiGeoCentersSRV();
+			UserData->VoronoiGeoMeshRangesSRV = CBTResources->GetVoronoiGeoMeshRangesSRV();
+			UserData->VoronoiGeoMeshFlatSRV = CBTResources->GetVoronoiGeoMeshFlatSRV();
+			UserData->VoronoiCellColorsSRV = CBTResources->GetVoronoiCellColorsSRV();
 		}
 
 		UserData->LodViewOrigin = (FVector3f)MainView->ViewMatrices.GetViewOrigin();

@@ -525,6 +525,10 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 	LonLat.Empty();
 	LonLat.Reserve(N);
 
+	// init colors
+	VoronoiCellColors.Empty();
+	VoronoiCellColors.Reserve(N);
+
 	// First algorithm from RedBlob / CGA FAQ
 	const double s = 3.6 / Sleef_sqrt_u05((double)N);
 	const double dz = 2.0 / (double)N;
@@ -533,7 +537,7 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 	double lon = 0.0;
 
 	// Deterministic jitter
-	FRandomStream Rng(123456);
+	FRandomStream Rng(RandomSeed);
 
 	for (int32 k = 0; k < N; ++k, z -= dz)
 	{
@@ -582,6 +586,16 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 		// RedBlob increment
 		const double safeR2 = (r > 1e-12) ? r : 1e-12;
 		lon += s / safeR2;
+
+		/****************************************************
+		*Voronoi cell colors (randomized but deterministic)*/
+		const uint32 R = RngStream.RandRange(0, 255);
+		const uint32 G = RngStream.RandRange(0, 255);
+		const uint32 B = RngStream.RandRange(0, 255);
+		const uint32 A = 255;
+
+		const uint32 PackedColor = R | (G << 8) | (B << 16) | (A << 24);
+		VoronoiCellColors.Add(PackedColor);
 	}
 }
 
@@ -602,7 +616,7 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere2()
 	double z = 1.0 - dz * 0.5;
 	double lon = 0.0;
 
-	FRandomStream Rng(123456); // deterministic jitter
+	FRandomStream Rng(RandomSeed); // deterministic jitter
 
 	for (int32 k = 0; k < N; ++k, z -= dz)
 	{
@@ -902,6 +916,8 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	VoronoiGeoMesh = tempResult.Polygons;
 	VoronoiGeoCenters = tempResult.Centers;
 	VoronoiGeoCenters_HL = tempResult.Centers_HL;
+	VoronoiGeoMesh_Ranges = tempResult.VoronoiGeoMesh_Ranges;
+	VoronoiGeoMesh_Flat = tempResult.VoronoiGeoMesh_Flat;
 
 
 	// --- BUILD HALF-EDGE BUFFER FOR CBT ---
@@ -987,10 +1003,19 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 		//if (Node_2k + Node_2kplus1>0) UE_LOG(LogTemp, Warning, TEXT("SUM ID: %d || SUM: %d"), Reverse_h, Node_2k + Node_2kplus1); // LOG INDICES WHICH SUM IS HIGHER THAN 0
 	}
 
-	if (!CBTResources.IsValid())
+	if (CBTResources.IsValid())
 	{
-		CBTResources = MakeShared<FCBTResource_Interface>();
+		if (CBTResources->IsInitialized())
+		{
+			BeginReleaseResource(CBTResources.Get());
+			FlushRenderingCommands();
+		}
+
+		CBTResources.Reset();
 	}
+
+	CBTResources = MakeShared<FCBTResource_Interface>();
+	CBTResources->PrimeVoronoiBuffers(VoronoiGeoCenters_HL, VoronoiGeoMesh_Ranges, VoronoiGeoMesh_Flat, VoronoiCellColors);
 	CBTResources->PrimeTrianglesBuffers(FibonacciPoints_HL, SphericalTrisFlat, SphericalHalfEdges);
 	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters_HL, RootBisectors_Buffer, CBT_Buffer);
 
@@ -1057,6 +1082,10 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 	Result.Centers = Circumcenters;
 	Result.Centers_HL = Circumcenters_HL;
 	Result.Polygons.SetNum(NumSites);
+
+	// init voronoi geo mesh ranges and flat -GPU friendly- arrays
+	Result.VoronoiGeoMesh_Ranges.SetNumZeroed(NumSites);
+	Result.VoronoiGeoMesh_Flat.Reserve(NumTris * 3); // rough upper bound / over-reserve is fine
 
 	if (NumTris == 0)
 	{
@@ -1184,10 +1213,18 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 			// Final polygon is 4-point pseudo-loop: [C0, R1, C1, R0]
 			TArray<int32> FakePoly = { OrderedTris[0], i1, OrderedTris[1], i0 };
 			Result.Polygons[s] = FakePoly;
+
+			// populate voronoi geo mesh flat
+			const uint32 Start = static_cast<uint32>(Result.VoronoiGeoMesh_Flat.Num());
+			Result.VoronoiGeoMesh_Flat.Append(FakePoly);
+			Result.VoronoiGeoMesh_Ranges[s] = FUintVector2(Start, static_cast<uint32>(FakePoly.Num()));
 		}
 		else
 		{
 			Result.Polygons[s] = OrderedTris;
+			const uint32 Start = static_cast<uint32>(Result.VoronoiGeoMesh_Flat.Num());
+			Result.VoronoiGeoMesh_Flat.Append(OrderedTris);
+			Result.VoronoiGeoMesh_Ranges[s] = FUintVector2(Start, static_cast<uint32>(OrderedTris.Num()));
 		}
 	}
 
