@@ -20,6 +20,7 @@ struct FVertexFactoryIntermediates
     float2 LocalUV;
     float3 LocalPos;
     float3 WorldNormal;
+    float4 VertexColor;
 	/** Cached primitive and instance data */
     FSceneDataIntermediates SceneData;
 };
@@ -34,6 +35,7 @@ struct FVertexFactoryInterpolantsVSToPS
 #if NUM_TEX_COORD_INTERPOLATORS
     float4 TexCoords[(NUM_TEX_COORD_INTERPOLATORS + 1) / 2] : TEXCOORD0;
 #endif
+    float4 VertexColor : COLOR0;
 #if INSTANCED_STEREO
     nointerpolation uint EyeIndex : PACKED_EYE_INDEX;
 #endif
@@ -46,12 +48,11 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
     Intermediates.SceneData = VF_GPUSCENE_GET_INTERMEDIATES(Input);
 
     const QuadRenderInstance Instance = InstanceBuffer[Input.InstanceId];
-    const uint TriangleId = GetTriangleId(Instance);
+    Intermediates.VertexColor = UnpackColorRGBA8(VoronoiCellColors[Instance.SiteId]);
 
-    float3 V0;
-    float3 V1;
-    float3 V2;
-    GetTriangleVertices(TriangleId, V0, V1, V2);
+    const float3 V0 = ReconstructPosition(VoronoiGeoCenters[Instance.GeoCenterA]);
+    const float3 V1 = ReconstructPosition(VoronoiGeoCenters[Instance.GeoCenterB]);
+    const float3 V2 = ReconstructPosition(CBT_FibonacciPoints[Instance.SiteId]);
 
     float3 VertexPos;
     if (Input.VertexId == 0)
@@ -67,8 +68,8 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
         VertexPos = V2;
     }
 
-    Intermediates.LocalPos = VertexPos * 3000.0f; //3000.f
-    Intermediates.WorldNormal = GetTriangleNormal(V0, V1, V2);
+    Intermediates.LocalPos = VertexPos * 3000.0f;
+    Intermediates.WorldNormal = normalize(cross(V1 - V0, V2 - V0));
 
     const float2 BarycentricUVs[3] =
     {
@@ -94,7 +95,9 @@ FMaterialVertexParameters GetMaterialVertexParameters(FVertexFactoryInput Input,
     Result.TangentToWorld[2] = Intermediates.WorldNormal;
 
     Result.PreSkinnedPosition = WorldPosition; // Intermediates.WorldPosPreDisplacement.xyz;
-    Result.PreSkinnedNormal = float3(0, 0, 1);
+    //Result.PreSkinnedNormal = float3(0, 0, 1);
+    Result.PreSkinnedNormal = Intermediates.WorldNormal;
+    Result.VertexColor = Intermediates.VertexColor;
 
 #if NUM_MATERIAL_TEXCOORDS_VERTEX
 	UNROLL
@@ -191,7 +194,9 @@ float2 GetUV(FVertexFactoryInterpolantsVSToPS Interpolants, uint UVIndex)
 
 FVertexFactoryInterpolantsVSToPS VertexFactoryGetInterpolantsVSToPS(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates, FMaterialVertexParameters VertexParameters)
 {
-    FVertexFactoryInterpolantsVSToPS Interpolants = (FVertexFactoryInterpolantsVSToPS)0;
+    FVertexFactoryInterpolantsVSToPS Interpolants = (FVertexFactoryInterpolantsVSToPS) 0;
+
+    Interpolants.VertexColor = Intermediates.VertexColor;
 
 #if NUM_TEX_COORD_INTERPOLATORS
     float2 CustomizedUVs[NUM_TEX_COORD_INTERPOLATORS];
@@ -218,7 +223,8 @@ FMaterialPixelParameters GetMaterialPixelParameters(FVertexFactoryInterpolantsVS
 		Result.TexCoords[CoordinateIndex] = GetUV(Interpolants, CoordinateIndex);
 	}
 #endif	//NUM_MATERIAL_TEXCOORDS
-
+    
+    Result.VertexColor = Interpolants.VertexColor;
     Result.TwoSidedSign = 0;
     Result.PrimitiveId = GetPrimitiveId(Interpolants);
 

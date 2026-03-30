@@ -307,8 +307,8 @@ FPrimitiveViewRelevance FGeoVoronoiIndirectInstancingSceneProxy::GetViewRelevanc
 	const bool bHasResources = CBTResources.IsValid();
 	const bool bGPUReady = bHasResources && CBTResources->IsGPUReady();
 
-	UE_LOG(LogTemp, Warning, TEXT("GetViewRelevance: bHasResources=%d bGPUReady=%d"),
-		bHasResources ? 1 : 0, bGPUReady ? 1 : 0);
+	/*UE_LOG(LogTemp, Warning, TEXT("GetViewRelevance: bHasResources=%d bGPUReady=%d"),
+		bHasResources ? 1 : 0, bGPUReady ? 1 : 0);*/
 
 	const bool bValid = CBTResources.IsValid() && CBTResources->IsGPUReady();
 	const bool bIsHiddenInEditor = bHiddenInEditor && View->Family->EngineShowFlags.Editor;
@@ -556,10 +556,13 @@ namespace GeoVoronoiIndirectInstancingMesh
 			RDG_BUFFER_ACCESS(IndirectArgsBuffer, ERHIAccess::IndirectArgs)
 			SHADER_PARAMETER(uint32, MaxInstances)
 			// CBT buffers
-			SHADER_PARAMETER(uint32, NumTriangles)
-			SHADER_PARAMETER(uint32, NumVertices)
+			SHADER_PARAMETER(uint32, NumSites)
+			SHADER_PARAMETER(uint32, NumVoronoiCenters)
 			SHADER_PARAMETER_SRV(StructuredBuffer<FVector3_HighLow>, CBT_FibonacciPoints)
 			SHADER_PARAMETER_SRV(StructuredBuffer<int>, CBT_SphericalTriangles)
+			SHADER_PARAMETER_SRV(StructuredBuffer<FVector3_HighLow>, VoronoiGeoCenters)
+			SHADER_PARAMETER_SRV(StructuredBuffer<uint2>, VoronoiGeoMeshRanges)
+			SHADER_PARAMETER_SRV(StructuredBuffer<int>, VoronoiGeoMeshFlat)
 		END_SHADER_PARAMETER_STRUCT()
 	};
 
@@ -882,12 +885,6 @@ namespace GeoVoronoiIndirectInstancingMesh
 			return;
 		}
 
-		const uint32 NumTriangles = InCBTResources->GetNumTriangles();
-		if (NumTriangles == 0u)
-		{
-			return;
-		}
-
 		FCullInstancesVHM_CS::FParameters* PassParameters =
 			GraphBuilder.AllocParameters<FCullInstancesVHM_CS::FParameters>();
 
@@ -918,15 +915,23 @@ namespace GeoVoronoiIndirectInstancingMesh
 		PassParameters->MaxInstances = GeoVoronoiIndirectInstancingMesh::MaxSupportedInstances;
 
 		// Bind CBT GPU buffers
-		PassParameters->NumTriangles = NumTriangles;
-		PassParameters->NumVertices = InCBTResources->GetNumFibonacciPoints();
+		PassParameters->NumSites = InCBTResources->GetNumFibonacciPoints();
+		PassParameters->NumVoronoiCenters = InCBTResources->GetNumVoronoiGeoCenters();
 		PassParameters->CBT_FibonacciPoints = InCBTResources->GetFibonacciPointsSRV();
 		PassParameters->CBT_SphericalTriangles = InCBTResources->GetSphericalTrianglesSRV();
+		PassParameters->VoronoiGeoCenters = InCBTResources->GetVoronoiGeoCentersSRV();
+		PassParameters->VoronoiGeoMeshRanges = InCBTResources->GetVoronoiGeoMeshRangesSRV();
+		PassParameters->VoronoiGeoMeshFlat = InCBTResources->GetVoronoiGeoMeshFlatSRV();
 
 		FCullInstancesVHM_CS::FPermutationDomain PermutationVector;
 		PermutationVector.Set<FCullInstancesVHM_CS::FReuseCullDim>(InViewDesc.bIsMainView);
 
-		const FIntVector GroupCount(FMath::DivideAndRoundUp<int32>((int32)NumTriangles, 64), 1, 1);
+		const uint32 NumSites = InCBTResources->GetNumFibonacciPoints();
+		if (NumSites == 0u)
+		{
+			return;
+		}
+		const FIntVector GroupCount(FMath::DivideAndRoundUp<int32>((int32)NumSites, 64), 1, 1);
 		TShaderMapRef<FCullInstancesVHM_CS> ComputeShader(InGlobalShaderMap, PermutationVector);
 		/*FComputeShaderUtils::AddPass(
 			GraphBuilder,

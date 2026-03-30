@@ -203,43 +203,39 @@ void InitInstanceBufferCS()
 [numthreads(64, 1, 1)]
 void CullInstancesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
- //   uint QuadIndex = DispatchThreadId.x;
- //   if (QuadIndex >= IndirectArgsBufferSRV[3])
- //       return;
-
- //   uint2 PackedItem = QuadBuffer[QuadIndex];
- //   QuadRenderItem Item = UnpackQuadRenderItem(PackedItem);
-	
-	//// Add to final render intance list.
- //   QuadRenderInstance OutInstance;
- //   OutInstance.UVTransform = float3(0, 0, 0);
- //   OutInstance.PosLevelPacked = 0;
- //   uint Write;
- //   InterlockedAdd(RWIndirectArgsBuffer[1], 1, Write);
- //   RWInstanceBuffer[Write] = OutInstance;
-    
-    uint TriangleId = DispatchThreadId.x;
-    if (TriangleId >= NumTriangles || TriangleId >= MaxInstances)
+    uint SiteId = DispatchThreadId.x;
+    if (SiteId >= NumSites)
         return;
 
-    uint BaseIndex = TriangleId * 3;
-    uint Index0 = (uint) CBT_SphericalTriangles[BaseIndex + 0];
-    uint Index1 = (uint) CBT_SphericalTriangles[BaseIndex + 1];
-    uint Index2 = (uint) CBT_SphericalTriangles[BaseIndex + 2];
+    uint2 Range = VoronoiGeoMeshRanges[SiteId];
+    uint Start = Range.x;
+    uint Count = Range.y;
 
-    // Bounds check / skip corrupt or out-of-range triangle indices
-    if (Index0 >= NumVertices || Index1 >= NumVertices || Index2 >= NumVertices)
+    if (Count < 2)
         return;
 
-    // TODO: frustum cull here using triangle centroid vs FrustumPlanes
+    // Optional: frustum cull the whole cell here before emitting triangles.
 
-    // Write the surviving triangle ID into the instance buffer.
-    // The vertex factory reads PosLevelPacked as the triangle index.
-    QuadRenderInstance OutInstance;
-    OutInstance.UVTransform = float3(0, 0, 0);
-    OutInstance.PosLevelPacked = TriangleId;
+    for (uint i = 0; i < Count; ++i)
+    {
+        uint GeoCenterA = (uint) VoronoiGeoMeshFlat[Start + i];
+        uint GeoCenterB = (uint) VoronoiGeoMeshFlat[Start + ((i + 1) % Count)];
 
-    uint Write;
-    InterlockedAdd(RWIndirectArgsBuffer[1], 1, Write);
-    RWInstanceBuffer[Write] = OutInstance;
+        if (GeoCenterA >= NumVoronoiCenters || GeoCenterB >= NumVoronoiCenters)
+            continue;
+
+        QuadRenderInstance OutInstance;
+        OutInstance.GeoCenterA = GeoCenterA;
+        OutInstance.GeoCenterB = GeoCenterB;
+        OutInstance.SiteId = SiteId;
+        OutInstance.Padding = 0;
+
+        uint Write;
+        InterlockedAdd(RWIndirectArgsBuffer[1], 1, Write);
+
+        if (Write < MaxInstances)
+        {
+            RWInstanceBuffer[Write] = OutInstance;
+        }
+    }
 }

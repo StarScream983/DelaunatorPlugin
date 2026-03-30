@@ -86,19 +86,21 @@ QuadRenderItem UnpackQuadRenderItem(uint2 PackedItem)
 /** Final render instance description used by the DrawInstancedIndirect(). */
 struct QuadRenderInstance
 {
-    float3 UVTransform;
-    uint PosLevelPacked;
+    uint GeoCenterA;
+    uint GeoCenterB;
+    uint SiteId;
+    uint Padding;
 };
 
-uint2 UnpackPos(QuadRenderInstance Item)
-{
-    return uint2(Item.PosLevelPacked & 0x00000FFF, (Item.PosLevelPacked & 0x00FFF000) >> 12);
-}
+//uint2 UnpackPos(QuadRenderInstance Item)
+//{
+//    return uint2(Item.PosLevelPacked & 0x00000FFF, (Item.PosLevelPacked & 0x00FFF000) >> 12);
+//}
 
-uint UnpackLevel(QuadRenderInstance Item)
-{
-    return Item.PosLevelPacked >> 24;
-}
+//uint UnpackLevel(QuadRenderInstance Item)
+//{
+//    return Item.PosLevelPacked >> 24;
+//}
 
 
 /** Shared helper function to calculate a LOD based on distance from camera. */
@@ -121,8 +123,8 @@ float CalculateBiasLod(float InValue, float InLodBiasScale)
 // CBT GPU Buffers from FCBTResource_Interface
 // =============================================================================
 
-uint NumTriangles;
-uint NumVertices;
+uint NumSites;
+uint NumVoronoiCenters;
 
 struct FHighLow_Pair
 {
@@ -143,7 +145,7 @@ StructuredBuffer<FVector3_HighLow> CBT_FibonacciPoints;
 StructuredBuffer<int> CBT_SphericalTriangles;
 
 StructuredBuffer<FVector3_HighLow> VoronoiGeoCenters;
-StructuredBuffer<int2> VoronoiGeoMeshRanges; // or uint2 if you change CPU type
+StructuredBuffer<uint2> VoronoiGeoMeshRanges; // or uint2 if you change CPU type
 StructuredBuffer<int> VoronoiGeoMeshFlat;
 Buffer<uint> VoronoiCellColors;
 
@@ -157,10 +159,10 @@ float3 ReconstructPosition(FVector3_HighLow v)
     );
 }
 
-uint GetTriangleId(QuadRenderInstance Item)
-{
-    return Item.PosLevelPacked;
-}
+//uint GetTriangleId(QuadRenderInstance Item)
+//{
+//    return Item.PosLevelPacked;
+//}
 
 float3 GetFibonacciPoint(uint Index)
 {
@@ -188,4 +190,13 @@ void GetTriangleVertices(uint TriId, out float3 V0, out float3 V1, out float3 V2
 float3 GetTriangleNormal(float3 V0, float3 V1, float3 V2)
 {
     return normalize(cross(V1 - V0, V2 - V0));
+}
+
+float4 UnpackColorRGBA8(uint PackedColor)
+{
+    float R = (float) ((PackedColor >> 0) & 0xFF) / 255.0f;
+    float G = (float) ((PackedColor >> 8) & 0xFF) / 255.0f;
+    float B = (float) ((PackedColor >> 16) & 0xFF) / 255.0f;
+    float A = (float) ((PackedColor >> 24) & 0xFF) / 255.0f;
+    return float4(R, G, B, A);
 }

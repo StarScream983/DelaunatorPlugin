@@ -27,8 +27,8 @@ namespace FGeoVoronoiIndirectInstancingUtil
 		Indices.Reserve(3);
 
 		// CCW triangle winding order
-		Indices.Add(1);
 		Indices.Add(0);
+		Indices.Add(1);
 		Indices.Add(2);
 
 		const uint32 Size = Indices.GetResourceDataSize();
