@@ -203,14 +203,32 @@ void InitInstanceBufferCS()
 [numthreads(64, 1, 1)]
 void CullInstancesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 {
+    // One thread == one Voronoi site/cell.
     uint SiteId = DispatchThreadId.x;
+
+    // ADDED: guard against extra dispatched threads past the number of valid sites.
     if (SiteId >= NumSites)
         return;
 
+    // Per-site polygon range inside the flat Voronoi index buffer.
     uint2 Range = VoronoiGeoMeshRanges[SiteId];
     uint Start = Range.x;
     uint Count = Range.y;
 
+    // Existing guard: cannot build triangles from fewer than 2 polygon edges.
+    if (Count < 2)
+        return;
+
+    // ADDED: if the site's start offset is already outside the flat buffer, abort.
+    // This prevents invalid reads from VoronoiGeoMeshFlat.
+    if (Start >= NumVoronoiGeoMeshFlat)
+        return;
+
+    // ADDED: clamp polygon count so Start + Count never reads past VoronoiGeoMeshFlat.
+    // This is the key bounds fix for corrupted / overflowing ranges.
+    Count = min(Count, NumVoronoiGeoMeshFlat - Start);
+
+    // ADDED: after clamping, the polygon may no longer be large enough to emit triangles.
     if (Count < 2)
         return;
 
@@ -218,24 +236,36 @@ void CullInstancesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
     for (uint i = 0; i < Count; ++i)
     {
+        // Safe because Count was clamped against NumVoronoiGeoMeshFlat above.
         uint GeoCenterA = (uint) VoronoiGeoMeshFlat[Start + i];
         uint GeoCenterB = (uint) VoronoiGeoMeshFlat[Start + ((i + 1) % Count)];
 
+        // Existing guard: skip invalid Voronoi center indices.
         if (GeoCenterA >= NumVoronoiCenters || GeoCenterB >= NumVoronoiCenters)
             continue;
 
-        QuadRenderInstance OutInstance;
-        OutInstance.GeoCenterA = GeoCenterA;
-        OutInstance.GeoCenterB = GeoCenterB;
-        OutInstance.SiteId = SiteId;
-        OutInstance.Padding = 0;
-
+        // FIX: Reserve a slot atomically, but ONLY emit if within bounds.
+        // Use an InterlockedAdd then check — if we overflowed, undo the count
+        // so the indirect draw call never references unwritten slots.
         uint Write;
         InterlockedAdd(RWIndirectArgsBuffer[1], 1, Write);
 
         if (Write < MaxInstances)
         {
+            QuadRenderInstance OutInstance;
+            OutInstance.GeoCenterA = GeoCenterA;
+            OutInstance.GeoCenterB = GeoCenterB;
+            OutInstance.SiteId = SiteId;
+            OutInstance.Padding = 0;
+
             RWInstanceBuffer[Write] = OutInstance;
+        }
+        else
+        {
+            // FIX: Undo the increment — this slot will never be written,
+            // so the draw call must not try to render it.
+            uint Dummy;
+            InterlockedAdd(RWIndirectArgsBuffer[1], -1, Dummy);
         }
     }
 }

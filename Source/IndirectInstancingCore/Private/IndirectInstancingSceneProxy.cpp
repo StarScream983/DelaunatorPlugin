@@ -253,6 +253,7 @@ FGeoVoronoiIndirectInstancingSceneProxy::FGeoVoronoiIndirectInstancingSceneProxy
 
 	GeoVoronoiIndirectInstancingRendererExtension.RegisterExtension();
 	bHasDeformableMesh = false;
+	PlanetRadius = InComponent->GetPlanetRadius();
 
 	UMaterialInterface* ComponentMaterial = InComponent->GetMaterial();
 	const bool bValidMaterial = ComponentMaterial != nullptr && ComponentMaterial->CheckMaterialUsage_Concurrent(MATUSAGE_VirtualHeightfieldMesh);
@@ -284,6 +285,7 @@ void FGeoVoronoiIndirectInstancingSceneProxy::CreateRenderThreadResources()
 	UE_LOG(LogTemp, Warning, TEXT("SceneProxy::CreateRenderThreadResources"));
 	// Gather vertex factory uniform parameters.
 	FGeoVoronoiIndirectInstancingParameters UniformParams;
+	UniformParams.PlanetRadius = PlanetRadius;
 	// TODO UNIFORM INIT
 
 	// Create vertex factory.
@@ -422,7 +424,7 @@ namespace GeoVoronoiIndirectInstancingMesh
 	/* Keep indirect args offsets in sync with ISM.usf. */
 	static const int32 IndirectArgsByteOffset_FinalCull = 0;
 	static const int32 IndirectArgsByteSize = 4 * sizeof(uint32);
-	static const uint32 MaxSupportedInstances = 1u << 18;
+	static const uint32 MaxSupportedInstances = 1u << 20;
 
 	struct WorkerQueueInfo
 	{
@@ -554,10 +556,11 @@ namespace GeoVoronoiIndirectInstancingMesh
 			SHADER_PARAMETER_UAV(RWStructuredBuffer<GeoVoronoiIndirectInstancingMesh::FGeoVoronoiIndirectInstancingRenderInstance>, RWInstanceBuffer)
 			SHADER_PARAMETER_UAV(RWBuffer<uint>, RWIndirectArgsBuffer)
 			RDG_BUFFER_ACCESS(IndirectArgsBuffer, ERHIAccess::IndirectArgs)
-			SHADER_PARAMETER(uint32, MaxInstances)
-			// CBT buffers
-			SHADER_PARAMETER(uint32, NumSites)
-			SHADER_PARAMETER(uint32, NumVoronoiCenters)
+			SHADER_PARAMETER(uint32, MaxInstances) // Existing safety cap for instance-buffer writes.
+			// CBT / Voronoi buffers
+			SHADER_PARAMETER(uint32, NumSites) // Number of valid site threads the shader may process.
+			SHADER_PARAMETER(uint32, NumVoronoiCenters) // Number of valid circumcenter indices.
+			SHADER_PARAMETER(uint32, NumVoronoiGeoMeshFlat) // ADDED: logical element count of VoronoiGeoMeshFlat for bounds checks in HLSL.
 			SHADER_PARAMETER_SRV(StructuredBuffer<FVector3_HighLow>, CBT_FibonacciPoints)
 			SHADER_PARAMETER_SRV(StructuredBuffer<int>, CBT_SphericalTriangles)
 			SHADER_PARAMETER_SRV(StructuredBuffer<FVector3_HighLow>, VoronoiGeoCenters)
@@ -917,6 +920,8 @@ namespace GeoVoronoiIndirectInstancingMesh
 		// Bind CBT GPU buffers
 		PassParameters->NumSites = InCBTResources->GetNumFibonacciPoints();
 		PassParameters->NumVoronoiCenters = InCBTResources->GetNumVoronoiGeoCenters();
+		PassParameters->NumVoronoiGeoMeshFlat = InCBTResources->GetNumVoronoiGeoMeshFlat(); // ADDED: shader-side replacement for CPU .Num() on VoronoiGeoMeshFlat.
+
 		PassParameters->CBT_FibonacciPoints = InCBTResources->GetFibonacciPointsSRV();
 		PassParameters->CBT_SphericalTriangles = InCBTResources->GetSphericalTrianglesSRV();
 		PassParameters->VoronoiGeoCenters = InCBTResources->GetVoronoiGeoCentersSRV();

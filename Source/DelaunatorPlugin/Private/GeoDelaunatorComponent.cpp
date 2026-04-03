@@ -152,6 +152,7 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 #pragma region PLANET_GENERAL_DATA_WINDOW
 	if (ImGui::Begin("Delaunay General Data Debug")) {
 		ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+		ImGui::Text("Number of Sites: %d", N);
 		ImGui::Text("Half_Edge Buffer: %d", HalfEdge_Buffer.Num());
 		ImGui::Text("Root Bisectors Buffer: %d", HalfEdge_Buffer.Num());
 		ImGui::Text("CBT Buffer: %d", CBT_Buffer.Num());
@@ -416,30 +417,33 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 #endif
 
 	// SPHERE DELAUNAY DEBUG DRAW
-		if(bShowDelaunaySites)
-		{
-			for (int32 i = 0; i < N; i++)
-			{
-				//UE_LOG(LogTemp, Warning, TEXT("Point: %s"), *point.ToString());
-				DrawDebugPoint(GetWorld(), Location + FibonacciPoints[i] * PlanetRadius, DebugPointScale, FColor::Red);
-				//DrawDebugPoint(GetWorld(), Location + PivotedPoints[i] * PlanetRadius, DebugPointScale, FColor::Blue);
-				//if (i < 999) DrawDebugPoint(GetWorld(), Location + FVector(Projected2D[i].X, Projected2D[i].Y, Location.Z)*PlanetRadius, DebugPointScale, FColor::Magenta);
-			}
-		}
+	const FTransform& ComponentTransform = GetComponentTransform();
 
-		if (bShowDelaunayEdges)
+	if (bShowDelaunaySites)
+	{
+		for (int32 i = 0; i < N; i++)
 		{
-			for (const FIntVector& tri : SphericalTriangles)
-			{
-				const FVector A = FibonacciPoints[tri.X] * PlanetRadius + Location;
-				const FVector B = FibonacciPoints[tri.Y] * PlanetRadius + Location;
-				const FVector C = FibonacciPoints[tri.Z] * PlanetRadius + Location;
-
-				DrawDebugLine(GetWorld(), A, B, FColor::Black, false, 0.f, 0, DebugLineThickness);
-				DrawDebugLine(GetWorld(), B, C, FColor::Black, false, 0.f, 0, DebugLineThickness);
-				DrawDebugLine(GetWorld(), C, A, FColor::Black, false, 0.f, 0, DebugLineThickness);
-			}
+			DrawDebugPoint(
+				GetWorld(),
+				ComponentTransform.TransformPosition(FibonacciPoints[i] * PlanetRadius),
+				DebugPointScale,
+				FColor::Red);
 		}
+	}
+
+	if (bShowDelaunayEdges)
+	{
+		for (const FIntVector& tri : SphericalTriangles)
+		{
+			const FVector A = ComponentTransform.TransformPosition(FibonacciPoints[tri.X] * PlanetRadius);
+			const FVector B = ComponentTransform.TransformPosition(FibonacciPoints[tri.Y] * PlanetRadius);
+			const FVector C = ComponentTransform.TransformPosition(FibonacciPoints[tri.Z] * PlanetRadius);
+
+			DrawDebugLine(GetWorld(), A, B, FColor::Black, false, 0.0f, 0, DebugLineThickness);
+			DrawDebugLine(GetWorld(), B, C, FColor::Black, false, 0.0f, 0, DebugLineThickness);
+			DrawDebugLine(GetWorld(), C, A, FColor::Black, false, 0.0f, 0, DebugLineThickness);
+		}
+	}
 
 #pragma region VORONOI_DEBUG_DRAW_2D
 	// 2D VORONOI
@@ -492,23 +496,28 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	// SPHERE VORONOI DEBUG DRAW
 	if (bShowVoronoiVerts || bShowVoronoiEdges)
 	{
-		for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
+		//const FTransform& ComponentTransform = GetComponentTransform();
+
+		if (bShowVoronoiVerts || bShowVoronoiEdges)
 		{
-			const TArray<int32>& TriIndices = VoronoiGeoMesh[Site];
-			if (TriIndices.Num() == 0) continue;
-
-			for (int32 i = 0; i < TriIndices.Num(); ++i)
+			for (int32 Site = 0; Site < VoronoiGeoMesh.Num(); ++Site)
 			{
-				int32 i0 = TriIndices[i];
-				int32 i1 = TriIndices[(i + 1) % TriIndices.Num()];
+				const TArray<int32>& TriIndices = VoronoiGeoMesh[Site];
+				if (TriIndices.Num() == 0) continue;
 
-				if (!VoronoiGeoCenters.IsValidIndex(i0) || !VoronoiGeoCenters.IsValidIndex(i1)) continue;
+				for (int32 i = 0; i < TriIndices.Num(); ++i)
+				{
+					const int32 i0 = TriIndices[i];
+					const int32 i1 = TriIndices[(i + 1) % TriIndices.Num()];
 
-				const FVector A = VoronoiGeoCenters[i0] * PlanetRadius + Location;
-				const FVector B = VoronoiGeoCenters[i1] * PlanetRadius + Location;
+					if (!VoronoiGeoCenters.IsValidIndex(i0) || !VoronoiGeoCenters.IsValidIndex(i1)) continue;
 
-				if (bShowVoronoiVerts) DrawDebugPoint(GetWorld(), A, DebugPointScale, FColor::Blue);
-				if (bShowVoronoiEdges) DrawDebugLine(GetWorld(), A, B, FColor::White, false, 0, 0, DebugLineThickness);
+					const FVector A = ComponentTransform.TransformPosition(VoronoiGeoCenters[i0] * PlanetRadius);
+					const FVector B = ComponentTransform.TransformPosition(VoronoiGeoCenters[i1] * PlanetRadius);
+
+					if (bShowVoronoiVerts) DrawDebugPoint(GetWorld(), A, DebugPointScale, FColor::Blue);
+					if (bShowVoronoiEdges) DrawDebugLine(GetWorld(), A, B, FColor::White, false, 0.0f, 0, DebugLineThickness);
+				}
 			}
 		}
 	}
@@ -876,7 +885,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 		// Skip degenerate triangles (any repeated vertex)
 		// if (a == b || b == c || c == a)	continue;
 
-		if (a != b && b != c)
+		if (a != b && b != c && a != c) // i don't know if this is necessary && a != c, the triangles linking to center of planet was fixed in Geo_Circumcenters
 		{
 			const FIntVector& tri = FIntVector(a, b, c);
 			SphericalTriangles.Add(tri); // SphericalTriangles.Add(FIntVector(a, b, c));
@@ -910,7 +919,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	TArray<FVector3_HighLow> Circumcenters_HL; // transiant to build VoronoiGeoCenters_HL
 	Circumcenters_HL.Empty();
 	Circumcenters_HL.Reserve(SphericalTriangles.Num());
-	Geo_Centroids(Circumcenters, Circumcenters_HL);
+	Geo_Circumcenters(Circumcenters, Circumcenters_HL);
 
 	FGeoPolygonResult tempResult = Geo_Polygons(Circumcenters, Circumcenters_HL);
 	VoronoiGeoMesh = tempResult.Polygons;
@@ -918,7 +927,6 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	VoronoiGeoCenters_HL = tempResult.Centers_HL;
 	VoronoiGeoMesh_Ranges = tempResult.VoronoiGeoMesh_Ranges;
 	VoronoiGeoMesh_Flat = tempResult.VoronoiGeoMesh_Flat;
-
 
 	// --- BUILD HALF-EDGE BUFFER FOR CBT ---
 	HalfEdge_Buffer.Empty();
@@ -1003,6 +1011,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 		//if (Node_2k + Node_2kplus1>0) UE_LOG(LogTemp, Warning, TEXT("SUM ID: %d || SUM: %d"), Reverse_h, Node_2k + Node_2kplus1); // LOG INDICES WHICH SUM IS HIGHER THAN 0
 	}
 
+
 	if (CBTResources.IsValid())
 	{
 		if (CBTResources->IsInitialized())
@@ -1022,7 +1031,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	// CBTResources is now valid — recreate the scene proxy so it captures the new pointer.
 	// InitRHI runs asynchronously on the render thread; the proxy's GetViewRelevance
 	// gates on IsGPUReady() so it will suppress drawing until upload completes.
-	MarkRenderStateDirty();
+	//MarkRenderStateDirty();
 
 	//*******************************************************************
 	//TEST for lambda function capture of inner parameters with [=, this]
@@ -1050,7 +1059,18 @@ void UGeoDelaunatorComponent::Geo_Circumcenters(TArray<FVector>& Circumcenters, 
 			+ FVector::CrossProduct(C, B)
 			+ FVector::CrossProduct(A, C);
 
+		/** THIS FIXES THE CASE OF DEGENERATE TRIANGLES LINKING TO THE CENTER OF THE PLANET(0, 0, 0) 
+		* WHICH CAUSES NAN CIRCUMCENTERS AND BREAKS EVERYTHING IN THE VORONOI BUILDING
+		* VERY IMPORTANT FIX, DON'T SKIP OR TRY TO "CLEAN" THESE TRIANGLES, JUST FIX THE CIRCUMCENTER CALCULATION TO AVOID NANs
+		*/
 		FVector Normalized = V.GetSafeNormal(); // This is the circumcenter on the unit sphere
+		if (Normalized.IsNearlyZero())
+		{
+			Normalized = (A + B + C).GetSafeNormal();
+		}
+		/****************************************************************************
+		* IMPORTANT FIX
+		*****************************************************************************/
 
 		Circumcenters.Add(Normalized);
 		Circumcenters_HL.Add(FVector3_HighLow(Normalized));

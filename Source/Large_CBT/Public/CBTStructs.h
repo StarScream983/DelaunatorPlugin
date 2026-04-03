@@ -120,18 +120,14 @@ struct FHighLow_Pair
     /** Create from double-precision value */
     explicit FHighLow_Pair(double Value)
     {
-        const double Stride = 65536.0;  // 2^16 - optimal split point
-        double HighDouble = floor(Value / Stride) * Stride;
-        double LowDouble = Value - HighDouble;
-        
-        High = (float)HighDouble;
-        Low = (float)LowDouble;
+        High = static_cast<float>(Value);
+        Low = static_cast<float>(Value - static_cast<double>(High));
     }
     
     /** Reconstruct to double precision */
     double Reconstruct() const
     {
-        return (double)High + (double)Low;
+        return static_cast<double>(High) + static_cast<double>(Low);
     }
 };
 

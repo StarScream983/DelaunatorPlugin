@@ -56,6 +56,7 @@ public:
 	bool bCallbackRegistered;
 
 	class FGeoVoronoiIndirectInstancingVertexFactory* VertexFactory;
+	float PlanetRadius = 1.0f;
 
 	/** Render-thread pointer to CBT GPU resources. Lifetime owned by UGeoDelaunatorComponent. */
 	TSharedPtr<FCBTResource_Interface> CBTResources;

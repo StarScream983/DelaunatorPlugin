@@ -16,6 +16,7 @@
  */
 BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FGeoVoronoiIndirectInstancingParameters, )
 	// SHADER_PARAMETER_TEXTURE(Texture2D<uint4>, PageTableTexture)
+	SHADER_PARAMETER(float, PlanetRadius)
 END_GLOBAL_SHADER_PARAMETER_STRUCT()
 
 typedef TUniformBufferRef<FGeoVoronoiIndirectInstancingParameters> FGeoVoronoiIndirectInstancingBufferRef;

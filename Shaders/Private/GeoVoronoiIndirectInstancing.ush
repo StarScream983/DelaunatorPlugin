@@ -125,6 +125,7 @@ float CalculateBiasLod(float InValue, float InLodBiasScale)
 
 uint NumSites;
 uint NumVoronoiCenters;
+uint NumVoronoiGeoMeshFlat; // ADDED: total number of elements in VoronoiGeoMeshFlat; required because StructuredBuffer has no .Num() in shader code.
 
 struct FHighLow_Pair
 {

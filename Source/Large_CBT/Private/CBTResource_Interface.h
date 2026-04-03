@@ -84,6 +84,9 @@ public:
 	FORCEINLINE uint32 GetNumTriangles() const { return static_cast<uint32>(CPU_SphericalTriangles_Buffer.Num() / 3); }
 	/** Returns number of Voronoi Geo Centers */
 	FORCEINLINE uint32 GetNumVoronoiGeoCenters() const { return static_cast<uint32>(CPU_VoronoiGeoCenters_Buffer.Num()); }
+	/**Returns the logical element count of the flat Voronoi polygon index buffer.
+	*This is passed to HLSL because StructuredBuffer does not expose a .Num() there.*/
+	FORCEINLINE uint32 GetNumVoronoiGeoMeshFlat() const	{ return static_cast<uint32>(CPU_VoronoiGeoMesh_Flat_Buffer.Num());	}
 
 	// Push Colors to buffer for Voronoi cells
 	void PrimeVoronoiBuffers(const TArray<FVector3_HighLow>& InVoronoiGeoMeshCenters, const TArray<FUintVector2>& InVoronoiGeoMesh_Ranges, const TArray<int32>& InVoronoiGeoMesh_Flat, const TArray<uint32>& InVoronoiCellColors);

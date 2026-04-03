@@ -68,7 +68,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
         VertexPos = V2;
     }
 
-    Intermediates.LocalPos = VertexPos * 3000.0f;
+    Intermediates.LocalPos = VertexPos * GeoVoronoiIndirectInstancingParams.PlanetRadius;
     Intermediates.WorldNormal = normalize(cross(V1 - V0, V2 - V0));
 
     const float2 BarycentricUVs[3] =
