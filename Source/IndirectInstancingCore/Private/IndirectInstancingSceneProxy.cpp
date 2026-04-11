@@ -424,7 +424,8 @@ namespace GeoVoronoiIndirectInstancingMesh
 	/* Keep indirect args offsets in sync with ISM.usf. */
 	static const int32 IndirectArgsByteOffset_FinalCull = 0;
 	static const int32 IndirectArgsByteSize = 4 * sizeof(uint32);
-	static const uint32 MaxSupportedInstances = 1u << 20;
+	// MUST BE ADJUSTED FOR HIGHER INSTANCE COUNTS, make instance-buffer capacity dynamic from GetNumVoronoiGeoMeshFlat()
+	static const uint32 MaxSupportedInstances = 1u << 21; 
 
 	struct WorkerQueueInfo
 	{

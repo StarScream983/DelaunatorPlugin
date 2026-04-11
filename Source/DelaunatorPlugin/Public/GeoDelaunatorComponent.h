@@ -4,6 +4,10 @@
 
 #include "CoreMinimal.h"
 #include "Components/PrimitiveComponent.h"
+//COLLISION
+#include "Interfaces/Interface_CollisionDataProvider.h"
+#include "PhysicsEngine/BodySetup.h"
+
 #include "Delaunator.h"
 #include <sleef.h>
 #include <functional>
@@ -236,9 +240,32 @@ struct FVoronoiHalfEdge {
 	}
 };
 
+// STRUCT TO HOLD PLATE DATA, PURE CPU FOR NOW, MAYBE SPLIT INTO CPU/GPU VERSIONS LATER
+struct FPlateData
+{
+	FPlateData() = default;
+	FPlateData(int32 InSeedSite)
+		: SeedSite(InSeedSite), bIsOceanic(false), DesiredElevation(0.0), DriftDirection(FVector::ZeroVector), DriftSpeed(0.0) {}
+	FPlateData(int32 InSeedSite, bool InIsOceanic, double InDesiredElevation, FVector InDriftDirection, double InDriftSpeed)
+		: SeedSite(InSeedSite), bIsOceanic(InIsOceanic), DesiredElevation(InDesiredElevation), DriftDirection(InDriftDirection), DriftSpeed(InDriftSpeed) {}
+
+	int32   SeedSite;
+	bool    bIsOceanic;
+
+	// Gainey-style: base resting elevation for this plate
+	// Oceanic:     [-0.8, -0.3]  (deep ocean to shallow sea)
+	// Continental: [ 0.1,  0.6]  (lowlands to high plateau)
+	double  DesiredElevation;
+
+	// Step 2 (next session)
+	FVector DriftDirection;
+	double  DriftSpeed;
+
+	uint32 PackedColor;
+};
 
 UCLASS(Blueprintable, ClassGroup = (Custom), meta = (BlueprintSpawnableComponent), hideCategories = (Activation, Collision, Cooking, HLOD, Navigation, Object, Physics, VirtualTexture))
-class DELAUNATORPLUGIN_API UGeoDelaunatorComponent : public UPrimitiveComponent
+class DELAUNATORPLUGIN_API UGeoDelaunatorComponent : public UPrimitiveComponent, public IInterface_CollisionDataProvider
 {
 	GENERATED_UCLASS_BODY()
 
@@ -292,6 +319,46 @@ protected:
 	//~ End UPrimitiveComponent Interface
 	/*****************************************************************************
 	*          END INDIRECT INSTANCING PRIMITIVE COMPONENT                       *
+	*****************************************************************************/
+
+
+	/*****************************************************************************
+	*                                                                           *
+	*                     COLLISION DATA PROVIDER INTERFACE                      *
+	*                                                                           *
+	*  BodySetup creation and triangle-mesh collision data used by Chaos        *
+	*  for complex collision on the procedural spherical mesh.                  *
+	*                                                                           *
+	*  These overrides make the component act like a procedural collision       *
+	*  source: the physics system asks for triangle data, and we provide        *
+	*  it from the generated spherical Delaunay mesh.                           *
+	*                                                                           *
+	*****************************************************************************/
+public:
+	/** Returns the BodySetup used by Chaos for collision creation/caching. */
+	virtual UBodySetup* GetBodySetup() override;
+
+	/** Exports the generated spherical mesh as triangle collision data. */
+	virtual bool GetPhysicsTriMeshData(FTriMeshCollisionData* CollisionData, bool InUseAllTriData) override;
+
+	/** Returns whether this component currently has valid triangle collision data. */
+	virtual bool ContainsPhysicsTriMeshData(bool InUseAllTriData) const override;
+
+	/** We do not need mirrored negative-X collision data for this component. */
+	virtual bool WantsNegXTriMesh() override { return false; }
+
+	/** Creates/configures the BodySetup used for procedural triangle collision. */
+	void UpdateBodySetup();
+
+	/** Rebuilds collision after the procedural spherical mesh changes. */
+	void UpdateCollision();
+
+protected:
+	/** Runtime BodySetup that stores cooked collision data for the generated mesh. */
+	UPROPERTY(Transient)
+	TObjectPtr<UBodySetup> MeshBodySetup = nullptr;
+	/*****************************************************************************
+	*                 END COLLISION DATA PROVIDER INTERFACE                      *
 	*****************************************************************************/
 
 protected:
@@ -354,6 +421,7 @@ protected:
 	TArray<FUintVector2> VoronoiGeoMesh_Ranges;
 	TArray<int32> VoronoiGeoMesh_Flat;
 
+
 	// CBT STRUCTURE
 	uint32 D{ 16 }; // CBT Depth
 	TArray<FHalfEdge_CBT> HalfEdge_Buffer;
@@ -394,4 +462,49 @@ public:
 
 	// CBT STRUCTURE
 	// 100000 sites => 599988 half-edges
+
+protected:
+
+	const double OceanicRatio = 0.7;
+
+	// TECTONIC PLATES
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator")
+	int32 NumPlates = 24;
+
+	TArray<int32> PlateIdPerSite;     // size = FibonacciPoints.Num(), value = seed site id
+	TArray<FPlateData> Plates;  // chosen root sites, replaces PlateSeeds
+	// TArray<int32> PlateSeeds;         // chosen root sites
+	TArray<uint32> PlateDebugColors;  // optional packed color per site
+
+	void GeneratePlates_RedBlobRandomFill();
+	void GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors) const;
+	// add fisher-yates shuffle to randomize the order of neighbors and avoid similar plate IDs
+	TArray<int32> PickRandomPlateSeeds(int32 Count, TArray<FPlateData>& OutSeeds);
+	uint32 BuildPackedColor(const FPlateData& InPlate) const;
+	void BuildPlateDebugColors();
+
+	void AssignPlateTypes();
+
+protected:
+	// TECTONIC PLATES WITH WARP: PlateScore = BaseGrowth + Warp1 * OwnershipWarpStrength + RandomBias
+
+
+// New warp controls
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	float PlateWarpStrength = 0.25f;   // how far positions are displaced
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	float PlateWarpFrequency = 0.0002f; // scale relative to world units (planet radius ~500–6000)
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	int32 PlateWarpOctaves = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	float PlateWarpLacunarity = 2.0f;  // frequency multiplier per octave
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	float PlateWarpGain = 0.5f;        // amplitude multiplier per octave
+
+	void GeneratePlates_NearestNeighbor();
+	void GeneratePlates_NearestNeighbor_DomainWarped();
 };

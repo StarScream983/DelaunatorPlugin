@@ -12,6 +12,9 @@
 #endif
 
 
+
+
+
 /*****************************************************************************
 *                                                                           *
 *              INDIRECT INSTANCING PRIMITIVE COMPONENT                       *
@@ -95,6 +98,102 @@ void UGeoDelaunatorComponent::GetUsedMaterials(TArray<UMaterialInterface*>& OutM
 
 /*****************************************************************************
 *          END INDIRECT INSTANCING PRIMITIVE COMPONENT                       *
+*****************************************************************************/
+
+
+
+/*****************************************************************************
+*                                                                           *
+*                     COLLISION DATA PROVIDER INTERFACE                      *
+*                                                                           *
+*  BodySetup creation and triangle-mesh collision data used by Chaos        *
+*  for complex collision on the procedural spherical mesh.                  *
+*                                                                           *
+*  The generated Delaunay sphere already exists as CPU-side vertex/index     *
+*  arrays (`FibonacciPoints` + `SphericalTriangles`). These functions are    *
+*  the bridge between that procedural geometry and Unreal's collision        *
+*  system.                                                                  *
+*                                                                           *
+*****************************************************************************/
+
+UBodySetup* UGeoDelaunatorComponent::GetBodySetup()
+{
+	/** Return the runtime BodySetup used by Chaos.
+	*  If collision has not been initialized yet, the final implementation
+	*  should lazily create/configure it here via `UpdateBodySetup()`.
+	*/
+	return nullptr;
+}
+
+bool UGeoDelaunatorComponent::GetPhysicsTriMeshData(FTriMeshCollisionData* CollisionData, bool InUseAllTriData)
+{
+	/** Export the generated spherical mesh as raw triangle collision data.
+	*
+	*  Final implementation should:
+	*  1) Push all `FibonacciPoints` into `CollisionData->Vertices`
+	*  2) Push all `SphericalTriangles` into `CollisionData->Indices`
+	*  3) Set collision flags such as:
+	*     - `bFlipNormals`
+	*     - `bDeformableMesh`
+	*     - `bFastCook`
+	*
+	*  This is the equivalent of what `UProceduralMeshComponent` does when
+	*  providing complex collision from procedural mesh sections.
+	*/
+	/*if (!MeshBodySetup)
+	{
+		UpdateBodySetup();
+	}
+
+	return MeshBodySetup;*/
+	return false;
+}
+
+bool UGeoDelaunatorComponent::ContainsPhysicsTriMeshData(bool InUseAllTriData) const
+{
+	/** Report whether valid procedural triangle collision currently exists.
+	*
+	*  Final implementation should typically return true when:
+	*  - there are generated sphere vertices in `FibonacciPoints`
+	*  - there are generated indices in `SphericalTriangles`
+	*/
+	return false;
+}
+
+void UGeoDelaunatorComponent::UpdateBodySetup()
+{
+	/** Create/configure the runtime BodySetup used for procedural collision.
+	*
+	*  Final implementation should:
+	*  - allocate `MeshBodySetup` if needed
+	*  - set `CollisionTraceFlag` (likely `CTF_UseComplexAsSimple`)
+	*  - disable mirrored collision if not needed
+	*  - enable double-sided geometry if appropriate for the sphere shell
+	*/
+}
+
+void UGeoDelaunatorComponent::UpdateCollision()
+{
+	/** Rebuild collision after the procedural spherical mesh changes.
+	*
+	*  Final implementation should:
+	*  - ensure BodySetup exists/configured
+	*  - invalidate old physics data
+	*  - recreate physics meshes
+	*  - recreate the component's physics state if already registered
+	*
+	*  This should be called after `GeoDelaunayFrom()` updates the CPU mesh.
+	*/
+	if (!MeshBodySetup)
+	{
+		MeshBodySetup = NewObject<UBodySetup>(this, UBodySetup::StaticClass());
+		MeshBodySetup->CollisionTraceFlag = CTF_UseComplexAsSimple;
+		MeshBodySetup->bMeshCollideAll = true;
+	}
+}
+
+/*****************************************************************************
+*                 END COLLISION DATA PROVIDER INTERFACE                      *
 *****************************************************************************/
 
 // Called when the game starts
@@ -598,13 +697,13 @@ void UGeoDelaunatorComponent::GenerateFibonacciSphere1()
 
 		/****************************************************
 		*Voronoi cell colors (randomized but deterministic)*/
-		const uint32 R = RngStream.RandRange(0, 255);
+		/*const uint32 R = RngStream.RandRange(0, 255);
 		const uint32 G = RngStream.RandRange(0, 255);
 		const uint32 B = RngStream.RandRange(0, 255);
 		const uint32 A = 255;
 
 		const uint32 PackedColor = R | (G << 8) | (B << 16) | (A << 24);
-		VoronoiCellColors.Add(PackedColor);
+		VoronoiCellColors.Add(PackedColor);*/
 	}
 }
 
@@ -1023,6 +1122,8 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 		CBTResources.Reset();
 	}
 
+	GeneratePlates_RedBlobRandomFill();
+
 	CBTResources = MakeShared<FCBTResource_Interface>();
 	CBTResources->PrimeVoronoiBuffers(VoronoiGeoCenters_HL, VoronoiGeoMesh_Ranges, VoronoiGeoMesh_Flat, VoronoiCellColors);
 	CBTResources->PrimeTrianglesBuffers(FibonacciPoints_HL, SphericalTrisFlat, SphericalHalfEdges);
@@ -1031,7 +1132,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	// CBTResources is now valid — recreate the scene proxy so it captures the new pointer.
 	// InitRHI runs asynchronously on the render thread; the proxy's GetViewRelevance
 	// gates on IsGPUReady() so it will suppress drawing until upload completes.
-	//MarkRenderStateDirty();
+	MarkRenderStateDirty();
 
 	//*******************************************************************
 	//TEST for lambda function capture of inner parameters with [=, this]
@@ -1250,3 +1351,358 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 
 	return Result;
 }
+
+void UGeoDelaunatorComponent::GeneratePlates_RedBlobRandomFill()
+{
+	if (N <= 0) return;
+
+	PlateIdPerSite.Init(-1, N);	
+
+	TArray<int32> Queue = PickRandomPlateSeeds(NumPlates, Plates);
+	TArray<int32> Neighbors;
+
+	for (int32 QueueOut = 0; QueueOut < Queue.Num(); ++QueueOut)
+	{
+		const int32 Remaining = Queue.Num() - QueueOut;
+		const int32 RandomOffset = RngStream.RandRange(0, Remaining - 1);
+		const int32 Pos = QueueOut + RandomOffset;
+
+		const int32 CurrentSite = Queue[Pos];
+		Queue[Pos] = Queue[QueueOut];
+
+		GetVoronoiNeighbors(CurrentSite, Neighbors);
+
+		for (int32 NeighborSite : Neighbors)
+		{
+			if (PlateIdPerSite[NeighborSite] == -1)
+			{
+				PlateIdPerSite[NeighborSite] = PlateIdPerSite[CurrentSite];
+				Queue.Add(NeighborSite);
+			}
+		}
+	}
+
+	BuildPlateDebugColors();
+}
+
+void UGeoDelaunatorComponent::GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors) const
+{
+	OutNeighbors.Reset();
+
+	if (!VoronoiHalfEdges_Map.IsValidIndex(SiteIndex))
+	{
+		return;
+	}
+
+	const TArray<FVoronoiHalfEdge>& Ring = VoronoiHalfEdges_Map[SiteIndex];
+	OutNeighbors.Reserve(Ring.Num());
+
+	for (const FVoronoiHalfEdge& VHE : Ring)
+	{
+		if (VHE.End_Face >= 0 && VHE.End_Face != SiteIndex)
+		{
+			OutNeighbors.Add(VHE.End_Face);
+		}
+	}
+}
+
+TArray<int32> UGeoDelaunatorComponent::PickRandomPlateSeeds(int32 Count, TArray<FPlateData>& OutSeeds)
+{
+	OutSeeds.Reset();
+
+	const int32 Target = FMath::Min(Count, N);
+
+	TSet<int32> Chosen;
+	OutSeeds.Reserve(Target);
+
+	while (Chosen.Num() < Target)
+	{
+		const int32 SeedSite = RngStream.RandRange(0, N - 1);
+		if (Chosen.Contains(SeedSite))
+		{
+			continue;
+		}
+
+		Chosen.Add(SeedSite);
+		FPlateData newPlate(SeedSite);
+		newPlate.bIsOceanic = (RngStream.FRand() < OceanicRatio);
+		if (newPlate.bIsOceanic)
+		{
+			// Gainey's range: deep ocean to shallow shelf
+			newPlate.DesiredElevation = -0.8 + RngStream.FRand() * 0.5;  // [-0.8, -0.3]
+		}
+		else
+		{
+			// Gainey's range: coastal plain to high plateau
+			newPlate.DesiredElevation = 0.1 + RngStream.FRand() * 0.5;   // [0.1, 0.6]
+		}
+
+		/** Compute a random tangent vector at this seed's surface point,
+		* Gram-Schmidt projection. DotProduct(RandomVec, SeedNormal) measures how much of RandomVec 
+		* points in the normal direction. Multiplying by SeedNormal gives that component as a vector. 
+		* Subtracting it removes it — what remains lies entirely in the tangent plane.
+		*/
+		const FVector SeedNormal = FibonacciPoints[SeedSite];  // already unit
+		// Pick a random vector, project out the normal component → tangent
+		FVector RandomVec;
+		FVector Tangent;
+		do {
+			RandomVec = FMath::VRand();
+			RandomVec -= SeedNormal * FVector::DotProduct(RandomVec, SeedNormal);
+			Tangent = RandomVec.GetSafeNormal();
+		} while (Tangent.IsNearlyZero());  // retry if degenerate — happens < 0.001% of the time
+		newPlate.DriftDirection = Tangent;
+		newPlate.DriftSpeed = 0.5 + RngStream.FRand();  // [0.5, 1.5]
+
+		newPlate.PackedColor = BuildPackedColor(newPlate);
+		OutSeeds.Add(newPlate);
+		PlateIdPerSite[SeedSite] = SeedSite;
+	}
+	return Chosen.Array();
+}
+
+uint32 UGeoDelaunatorComponent::BuildPackedColor(const FPlateData& InPlate) const
+{
+	const uint32 R = (uint32)RngStream.RandRange(40, 255);
+	const uint32 G = (uint32)RngStream.RandRange(40, 255);
+	const uint32 B = (uint32)RngStream.RandRange(40, 255);
+	const uint32 A = 255;
+
+	return R | (G << 8) | (B << 16) | (A << 24);
+}
+
+void UGeoDelaunatorComponent::BuildPlateDebugColors()
+{
+	VoronoiCellColors.Init(0, N);
+
+	TMap<int32, uint32> SeedToColor;
+
+	for (const FPlateData& Plate : Plates)
+	{
+		SeedToColor.Add(Plate.SeedSite, Plate.PackedColor);
+	}
+
+	for (int32 Site = 0; Site < PlateIdPerSite.Num(); ++Site)
+	{
+		const int32 PlateSeed = PlateIdPerSite[Site]; 
+		const uint32* Packed = SeedToColor.Find(PlateSeed); // SeedColor is Plates
+		VoronoiCellColors[Site] = Packed ? *Packed : 0xffffffff;
+	}
+}
+
+void UGeoDelaunatorComponent::AssignPlateTypes()
+{
+	for (int32 i = 0; i < NumPlates; ++i)
+	{
+		FPlateData& Plate = Plates[i];
+		Plate.bIsOceanic = (RngStream.FRand() < OceanicRatio);
+
+		if (Plate.bIsOceanic)
+		{
+			// Gainey's range: deep ocean to shallow shelf
+			Plate.DesiredElevation = -0.8 + RngStream.FRand() * 0.5;  // [-0.8, -0.3]
+		}
+		else
+		{
+			// Gainey's range: coastal plain to high plateau
+			Plate.DesiredElevation = 0.1 + RngStream.FRand() * 0.5;   // [0.1, 0.6]
+		}
+	}
+}
+
+
+
+// PLATES WITH WARP
+//void UGeoDelaunatorComponent::GeneratePlates_NearestNeighbor()
+//{
+//	if (N <= 0)
+//	{
+//		return;
+//	}
+//
+//	PlateIdPerSite.Init(-1, N);
+//
+//	PickRandomPlateSeeds(NumPlates, PlateSeeds);
+//
+//	// Cache normalized seed positions — avoids re-normalizing inside inner loop
+//	TArray<FVector> SeedNormals;
+//	SeedNormals.Reserve(PlateSeeds.Num());
+//	for (int32 Seed : PlateSeeds)
+//	{
+//		SeedNormals.Add(FibonacciPoints[Seed].GetSafeNormal());
+//	}
+//
+//	for (int32 Site = 0; Site < N; ++Site)
+//	{
+//		const FVector SiteNormal = FibonacciPoints[Site].GetSafeNormal();
+//
+//		float   BestDot = -2.f;
+//		int32   BestSeed = PlateSeeds[0];
+//
+//		for (int32 i = 0; i < PlateSeeds.Num(); ++i)
+//		{
+//			// Dot product = cos(angle): higher = closer on sphere
+//			const float Dot = FVector::DotProduct(SiteNormal, SeedNormals[i]);
+//			if (Dot > BestDot)
+//			{
+//				BestDot = Dot;
+//				BestSeed = PlateSeeds[i];
+//			}
+//		}
+//
+//		PlateIdPerSite[Site] = BestSeed;
+//	}
+//
+//	BuildPlateDebugColors();
+//}
+//
+//
+//namespace PlanetNoise
+//{
+//	static uint32 Hash3(int32 X, int32 Y, int32 Z)
+//	{
+//		uint32 H = (uint32)(X * 1664525 + Y * 1013904223 + Z * 214013);
+//		H ^= (H >> 16); H *= 0x45d9f3bU; H ^= (H >> 16);
+//		return H;
+//	}
+//
+//	static double Grad3(uint32 Hash, double Dx, double Dy, double Dz)
+//	{
+//		// 12 edge directions of a unit cube
+//		static const double G[12][3] = {
+//			{ 1, 1, 0}, {-1, 1, 0}, { 1,-1, 0}, {-1,-1, 0},
+//			{ 1, 0, 1}, {-1, 0, 1}, { 1, 0,-1}, {-1, 0,-1},
+//			{ 0, 1, 1}, { 0,-1, 1}, { 0, 1,-1}, { 0,-1,-1}
+//		};
+//		const double* Gv = G[Hash % 12];
+//		return Gv[0] * Dx + Gv[1] * Dy + Gv[2] * Dz;
+//	}
+//
+//	// Quintic fade — zero 1st and 2nd derivative at cell boundaries
+//	static double Fade(double T) { return T * T * T * (T * (T * 6.0 - 15.0) + 10.0); }
+//	static double Lrp(double A, double B, double T) { return A + T * (B - A); }
+//
+//	static double Noise3D(double X, double Y, double Z)
+//	{
+//		const int32 IX = FMath::FloorToInt(X);
+//		const int32 IY = FMath::FloorToInt(Y);
+//		const int32 IZ = FMath::FloorToInt(Z);
+//		const double Dx = X - IX, Dy = Y - IY, Dz = Z - IZ;
+//		const double U = Fade(Dx), V = Fade(Dy), W = Fade(Dz);
+//
+//		return Lrp(
+//			Lrp(Lrp(Grad3(Hash3(IX, IY, IZ), Dx, Dy, Dz),
+//				Grad3(Hash3(IX + 1, IY, IZ), Dx - 1, Dy, Dz), U),
+//				Lrp(Grad3(Hash3(IX, IY + 1, IZ), Dx, Dy - 1, Dz),
+//					Grad3(Hash3(IX + 1, IY + 1, IZ), Dx - 1, Dy - 1, Dz), U), V),
+//			Lrp(Lrp(Grad3(Hash3(IX, IY, IZ + 1), Dx, Dy, Dz - 1),
+//				Grad3(Hash3(IX + 1, IY, IZ + 1), Dx - 1, Dy, Dz - 1), U),
+//				Lrp(Grad3(Hash3(IX, IY + 1, IZ + 1), Dx, Dy - 1, Dz - 1),
+//					Grad3(Hash3(IX + 1, IY + 1, IZ + 1), Dx - 1, Dy - 1, Dz - 1), U), V), W);
+//	}
+//
+//	// FBM — accumulate Octaves layers of noise
+//	static double FBM(double X, double Y, double Z,
+//		int32 Octaves, double Lacunarity, double Gain)
+//	{
+//		double Value = 0.0;
+//		double Amplitude = 0.5;
+//		double Frequency = 1.0;
+//		for (int32 i = 0; i < Octaves; ++i)
+//		{
+//			Value += Amplitude * Noise3D(X * Frequency, Y * Frequency, Z * Frequency);
+//			Frequency *= Lacunarity;
+//			Amplitude *= Gain;
+//		}
+//		return Value;
+//	}
+//} // namespace PlanetNoise
+//
+//
+//static FVector DomainWarpUnit(
+//	const FVector& UnitPoint,      // FibonacciPoints[i] — already unit length
+//	const double    PlanetRadius,   // scale up for noise domain
+//	const double    WarpStrength,
+//	const double    Frequency,
+//	const int32     Octaves,
+//	const double    Lacunarity,
+//	const double    Gain)
+//{
+//	// Scale to world space so noise responds to planet size, not unit sphere
+//	const double Px = (double)UnitPoint.X * PlanetRadius * Frequency;
+//	const double Py = (double)UnitPoint.Y * PlanetRadius * Frequency;
+//	const double Pz = (double)UnitPoint.Z * PlanetRadius * Frequency;
+//
+//	// Three decorrelated FBM channels — offsets break XYZ correlation
+//	const double Wx = PlanetNoise::FBM(Px, Py, Pz, Octaves, Lacunarity, Gain);
+//	const double Wy = PlanetNoise::FBM(Px + 5.2, Py + 1.3, Pz + 2.8, Octaves, Lacunarity, Gain);
+//	const double Wz = PlanetNoise::FBM(Px + 9.3, Py + 7.8, Pz + 4.1, Octaves, Lacunarity, Gain);
+//
+//	// Displace in unit-sphere space, then reproject — no pre-normalization needed
+//	const double NewX = (double)UnitPoint.X + Wx * WarpStrength;
+//	const double NewY = (double)UnitPoint.Y + Wy * WarpStrength;
+//	const double NewZ = (double)UnitPoint.Z + Wz * WarpStrength;
+//
+//	// Reproject back to sphere — magnitude is all that changes
+//	const double InvLen = 1.0 / FMath::Sqrt(NewX * NewX + NewY * NewY + NewZ * NewZ);
+//	return FVector((float)(NewX * InvLen), (float)(NewY * InvLen), (float)(NewZ * InvLen));
+//}
+//
+//void UGeoDelaunatorComponent::GeneratePlates_NearestNeighbor_DomainWarped()
+//{
+//	if (N <= 0) return;
+//
+//	PlateIdPerSite.Init(-1, N);
+//	PickRandomPlateSeeds(NumPlates, Plates);
+//
+//	// Warp seed positions by the SAME field as sites
+//	TArray<FVector> WarpedSeedDirs;
+//	WarpedSeedDirs.Reserve(Plates.Num());
+//	for (const FPlateData& Plate : Plates)
+//	{
+//		WarpedSeedDirs.Add(DomainWarpUnit(
+//			FibonacciPoints[Seed],
+//			(double)PlanetRadius,
+//			PlateWarpStrength,
+//			PlateWarpFrequency,
+//			PlateWarpOctaves,
+//			PlateWarpLacunarity,
+//			PlateWarpGain
+//		));
+//	}
+//
+//	for (int32 Site = 0; Site < N; ++Site)
+//	{
+//		// Warp site by same field
+//		const FVector WarpedSite = DomainWarpUnit(
+//			FibonacciPoints[Site],
+//			(double)PlanetRadius,
+//			PlateWarpStrength,
+//			PlateWarpFrequency,
+//			PlateWarpOctaves,
+//			PlateWarpLacunarity,
+//			PlateWarpGain
+//		);
+//
+//		double BestDot = -2.0;
+//		int32  BestSeed = PlateSeeds[0];
+//
+//		for (int32 i = 0; i < PlateSeeds.Num(); ++i)
+//		{
+//			const double Dot =
+//				(double)WarpedSite.X * (double)WarpedSeedDirs[i].X +
+//				(double)WarpedSite.Y * (double)WarpedSeedDirs[i].Y +
+//				(double)WarpedSite.Z * (double)WarpedSeedDirs[i].Z;
+//
+//			if (Dot > BestDot)
+//			{
+//				BestDot = Dot;
+//				BestSeed = PlateSeeds[i];
+//			}
+//		}
+//
+//		PlateIdPerSite[Site] = BestSeed;
+//	}
+//
+//	BuildPlateDebugColors();
+//}
