@@ -241,8 +241,11 @@ struct FVoronoiHalfEdge {
 };
 
 // STRUCT TO HOLD PLATE DATA, PURE CPU FOR NOW, MAYBE SPLIT INTO CPU/GPU VERSIONS LATER
+USTRUCT()
 struct FPlateData
 {
+	GENERATED_BODY()
+
 	FPlateData() = default;
 	FPlateData(int32 InSeedSite)
 		: SeedSite(InSeedSite), bIsOceanic(false), DesiredElevation(0.0), DriftDirection(FVector::ZeroVector), DriftSpeed(0.0) {}
@@ -262,6 +265,23 @@ struct FPlateData
 	double  DriftSpeed;
 
 	uint32 PackedColor;
+};
+USTRUCT()
+struct FPlateBoundary
+{
+	GENERATED_BODY()
+
+	int32  SiteA = -1;   // site on plate A
+	int32  SiteB = -1;   // site on plate B (different plate)
+	int32  PlateA = -1;   // seed site id of plate A
+	int32  PlateB = -1;   // seed site id of plate B
+
+    // Global flat indices into FHalfEdge_CBT array
+	int32  HalfEdgeAB = -1;   // SitePrefixSums[SiteA] + local ring idx → SiteB
+	int32  HalfEdgeBA = -1;   // SitePrefixSums[SiteB] + local ring idx → SiteA 
+
+	double Pressure = 0.0;  // >0 converging, <0 diverging
+	double Elevation = 0.0;  // computed boundary elevation
 };
 
 UCLASS(Blueprintable, ClassGroup = (Custom), meta = (BlueprintSpawnableComponent), hideCategories = (Activation, Collision, Cooking, HLOD, Navigation, Object, Physics, VirtualTexture))
@@ -398,7 +418,7 @@ protected:
 	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
 	TArray<int32> SphericalTrisFlat; // TRIANGLES BUFFER
 	TArray<TArray<FReverseHE>> ReverseEdgesHash; // TRANSIENT - NOT TO BE SAVED - USED IN GEO_POLYGONS
-	TArray<int32> SphericalHalfEdges; // BUFFER FOR FINDING TRIANGLES WITHOUT 
+	TArray<int32> SphericalHalfEdges; // BUFFER FOR FINDING TRIANGLES WITHOUT LOOPING
 
 
 	TArray<FVector2D> Projected2D; // FibonacciPoints after Stereographic Projection
@@ -473,17 +493,17 @@ protected:
 
 	TArray<int32> PlateIdPerSite;     // size = FibonacciPoints.Num(), value = seed site id
 	TArray<FPlateData> Plates;  // chosen root sites, replaces PlateSeeds
-	// TArray<int32> PlateSeeds;         // chosen root sites
+	TArray<FPlateBoundary> PlateBoundaries;
+	TArray<int32> SiteParent;  // -1 = seed (root), else = the site that propagated into this one
 	TArray<uint32> PlateDebugColors;  // optional packed color per site
 
 	void GeneratePlates_RedBlobRandomFill();
-	void GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors) const;
+	void GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors, TArray<int32>& OutHalfEdgeIndices) const;
 	// add fisher-yates shuffle to randomize the order of neighbors and avoid similar plate IDs
 	TArray<int32> PickRandomPlateSeeds(int32 Count, TArray<FPlateData>& OutSeeds);
-	uint32 BuildPackedColor(const FPlateData& InPlate) const;
+	TArray<int32> GetAncestorChain(int32 StartSite) const;
+	uint32 BuildPackedColor(const int32 PlateIndex) const;
 	void BuildPlateDebugColors();
-
-	void AssignPlateTypes();
 
 protected:
 	// TECTONIC PLATES WITH WARP: PlateScore = BaseGrowth + Warp1 * OwnershipWarpStrength + RandomBias
@@ -505,6 +525,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
 	float PlateWarpGain = 0.5f;        // amplitude multiplier per octave
 
-	void GeneratePlates_NearestNeighbor();
-	void GeneratePlates_NearestNeighbor_DomainWarped();
+	/*void GeneratePlates_NearestNeighbor();
+	void GeneratePlates_NearestNeighbor_DomainWarped();*/
 };

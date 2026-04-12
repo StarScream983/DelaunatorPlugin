@@ -1354,54 +1354,96 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 
 void UGeoDelaunatorComponent::GeneratePlates_RedBlobRandomFill()
 {
-	if (N <= 0) return;
+	if (N <= 100) return;
 
-	PlateIdPerSite.Init(-1, N);	
+	PlateIdPerSite.Init(-1, N);
+	SiteParent.Init(-1, N);
+	PlateBoundaries.Reset();
+	VoronoiCellColors.Init(0, N);  // initialize all black
 
 	TArray<int32> Queue = PickRandomPlateSeeds(NumPlates, Plates);
 	TArray<int32> Neighbors;
+	TArray<int32> HalfEdges;
 
 	for (int32 QueueOut = 0; QueueOut < Queue.Num(); ++QueueOut)
 	{
 		const int32 Remaining = Queue.Num() - QueueOut;
-		const int32 RandomOffset = RngStream.RandRange(0, Remaining - 1);
-		const int32 Pos = QueueOut + RandomOffset;
-
+		const int32 Pos = QueueOut + RngStream.RandRange(0, Remaining - 1);
 		const int32 CurrentSite = Queue[Pos];
 		Queue[Pos] = Queue[QueueOut];
 
-		GetVoronoiNeighbors(CurrentSite, Neighbors);
+		GetVoronoiNeighbors(CurrentSite, Neighbors, HalfEdges);
 
-		for (int32 NeighborSite : Neighbors)
+		for (int32 j = 0; j < Neighbors.Num(); ++j)
 		{
+			const int32 NeighborSite = Neighbors[j];
+
 			if (PlateIdPerSite[NeighborSite] == -1)
 			{
 				PlateIdPerSite[NeighborSite] = PlateIdPerSite[CurrentSite];
+				VoronoiCellColors[NeighborSite] = Plates[PlateIdPerSite[CurrentSite]].PackedColor;
+				SiteParent[NeighborSite] = CurrentSite;  // ← spanning tree
 				Queue.Add(NeighborSite);
+			}
+			else if (PlateIdPerSite[NeighborSite] != PlateIdPerSite[CurrentSite]
+				&& CurrentSite < NeighborSite)  // process each pair once
+			{
+				// Border detected → paint both sites white
+				VoronoiCellColors[CurrentSite] = 0xFFFFFFFF;
+				VoronoiCellColors[NeighborSite] = 0xFFFFFFFF;
+
+				const int32 GlobalAB = HalfEdges[j];
+				const int32 GlobalBA = HalfEdge_Buffer[GlobalAB].Twin;
+
+				const FPlateData& PA = Plates[PlateIdPerSite[CurrentSite]];
+				const FPlateData& PB = Plates[PlateIdPerSite[NeighborSite]];
+
+				const FVector RelativeMotion =
+					(PA.DriftDirection * (float)PA.DriftSpeed) -
+					(PB.DriftDirection * (float)PB.DriftSpeed);
+
+				const FVector BoundaryNormal =
+					(FibonacciPoints[NeighborSite] - FibonacciPoints[CurrentSite]).GetSafeNormal();
+
+				FPlateBoundary Boundary;
+				Boundary.SiteA = CurrentSite;
+				Boundary.SiteB = NeighborSite;
+				Boundary.PlateA = PlateIdPerSite[CurrentSite];
+				Boundary.PlateB = PlateIdPerSite[NeighborSite];
+				Boundary.HalfEdgeAB = GlobalAB;
+				Boundary.HalfEdgeBA = GlobalBA;
+				Boundary.Pressure = (double)FVector::DotProduct(RelativeMotion, BoundaryNormal);
+				PlateBoundaries.Add(Boundary);
 			}
 		}
 	}
 
-	BuildPlateDebugColors();
+	//BuildPlateDebugColors();
 }
 
-void UGeoDelaunatorComponent::GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors) const
+void UGeoDelaunatorComponent::GetVoronoiNeighbors(
+	int32               SiteIndex,
+	TArray<int32>& OutNeighbors,
+	TArray<int32>& OutHalfEdgeIndices)  // ← index into VoronoiHalfEdges_Map[SiteIndex] 
+	const
 {
 	OutNeighbors.Reset();
+	OutHalfEdgeIndices.Reset();
 
-	if (!VoronoiHalfEdges_Map.IsValidIndex(SiteIndex))
-	{
-		return;
-	}
+	if (!VoronoiHalfEdges_Map.IsValidIndex(SiteIndex)) return;
 
 	const TArray<FVoronoiHalfEdge>& Ring = VoronoiHalfEdges_Map[SiteIndex];
-	OutNeighbors.Reserve(Ring.Num());
+	const int32 Base = SitePrefixSums[SiteIndex];
 
-	for (const FVoronoiHalfEdge& VHE : Ring)
+	OutNeighbors.Reserve(Ring.Num());
+	OutHalfEdgeIndices.Reserve(Ring.Num());
+
+	for (int32 i = 0; i < Ring.Num(); ++i)
 	{
-		if (VHE.End_Face >= 0 && VHE.End_Face != SiteIndex)
+		if (Ring[i].End_Face >= 0 && Ring[i].End_Face != SiteIndex)
 		{
-			OutNeighbors.Add(VHE.End_Face);
+			OutNeighbors.Add(Ring[i].End_Face);
+			OutHalfEdgeIndices.Add(Base + i);
 		}
 	}
 }
@@ -1418,24 +1460,14 @@ TArray<int32> UGeoDelaunatorComponent::PickRandomPlateSeeds(int32 Count, TArray<
 	while (Chosen.Num() < Target)
 	{
 		const int32 SeedSite = RngStream.RandRange(0, N - 1);
-		if (Chosen.Contains(SeedSite))
-		{
-			continue;
-		}
+		if (Chosen.Contains(SeedSite)) continue;
 
 		Chosen.Add(SeedSite);
 		FPlateData newPlate(SeedSite);
 		newPlate.bIsOceanic = (RngStream.FRand() < OceanicRatio);
-		if (newPlate.bIsOceanic)
-		{
-			// Gainey's range: deep ocean to shallow shelf
-			newPlate.DesiredElevation = -0.8 + RngStream.FRand() * 0.5;  // [-0.8, -0.3]
-		}
-		else
-		{
-			// Gainey's range: coastal plain to high plateau
-			newPlate.DesiredElevation = 0.1 + RngStream.FRand() * 0.5;   // [0.1, 0.6]
-		}
+		newPlate.DesiredElevation = newPlate.bIsOceanic
+			? -0.8 + RngStream.FRand() * 0.5   // [-0.8, -0.3]
+			: 0.1 + RngStream.FRand() * 0.5;  // [ 0.1,  0.6]
 
 		/** Compute a random tangent vector at this seed's surface point,
 		* Gram-Schmidt projection. DotProduct(RandomVec, SeedNormal) measures how much of RandomVec 
@@ -1444,8 +1476,7 @@ TArray<int32> UGeoDelaunatorComponent::PickRandomPlateSeeds(int32 Count, TArray<
 		*/
 		const FVector SeedNormal = FibonacciPoints[SeedSite];  // already unit
 		// Pick a random vector, project out the normal component → tangent
-		FVector RandomVec;
-		FVector Tangent;
+		FVector RandomVec, Tangent;
 		do {
 			RandomVec = FMath::VRand();
 			RandomVec -= SeedNormal * FVector::DotProduct(RandomVec, SeedNormal);
@@ -1454,59 +1485,49 @@ TArray<int32> UGeoDelaunatorComponent::PickRandomPlateSeeds(int32 Count, TArray<
 		newPlate.DriftDirection = Tangent;
 		newPlate.DriftSpeed = 0.5 + RngStream.FRand();  // [0.5, 1.5]
 
-		newPlate.PackedColor = BuildPackedColor(newPlate);
+		newPlate.PackedColor = BuildPackedColor(OutSeeds.Num());
+		PlateIdPerSite[SeedSite] = OutSeeds.Num();
 		OutSeeds.Add(newPlate);
-		PlateIdPerSite[SeedSite] = SeedSite;
+		VoronoiCellColors[SeedSite] = newPlate.PackedColor; // paint immediately
 	}
 	return Chosen.Array();
 }
 
-uint32 UGeoDelaunatorComponent::BuildPackedColor(const FPlateData& InPlate) const
+TArray<int32> UGeoDelaunatorComponent::GetAncestorChain(int32 StartSite) const
 {
-	const uint32 R = (uint32)RngStream.RandRange(40, 255);
-	const uint32 G = (uint32)RngStream.RandRange(40, 255);
-	const uint32 B = (uint32)RngStream.RandRange(40, 255);
-	const uint32 A = 255;
+	TArray<int32> Chain;
+	int32 Current = StartSite;
+	while (Current != INDEX_NONE)
+	{
+		Chain.Add(Current);
+		Current = SiteParent[Current];
+	}
+	return Chain;  // [StartSite → ... → PlateSeed]
+}
 
-	return R | (G << 8) | (B << 16) | (A << 24);
+uint32 UGeoDelaunatorComponent::BuildPackedColor(const int32 PlateIndex) const
+{
+	// Hash the index to get uncorrelated R, G, B
+	uint32 H = (uint32)PlateIndex;
+	H ^= H << 13; H ^= H >> 7; H ^= H << 17;  // xorshift
+
+	const uint32 R = 30 + (H & 0xFF) % 225;
+	const uint32 G = 30 + ((H >> 8) & 0xFF) % 225;
+	const uint32 B = 30 + ((H >> 16) & 0xFF) % 225;
+
+	return R | (G << 8) | (B << 16) | (255u << 24);
 }
 
 void UGeoDelaunatorComponent::BuildPlateDebugColors()
 {
 	VoronoiCellColors.Init(0, N);
 
-	TMap<int32, uint32> SeedToColor;
-
-	for (const FPlateData& Plate : Plates)
+	for (int32 Site = 0; Site < N; ++Site)
 	{
-		SeedToColor.Add(Plate.SeedSite, Plate.PackedColor);
-	}
-
-	for (int32 Site = 0; Site < PlateIdPerSite.Num(); ++Site)
-	{
-		const int32 PlateSeed = PlateIdPerSite[Site]; 
-		const uint32* Packed = SeedToColor.Find(PlateSeed); // SeedColor is Plates
-		VoronoiCellColors[Site] = Packed ? *Packed : 0xffffffff;
-	}
-}
-
-void UGeoDelaunatorComponent::AssignPlateTypes()
-{
-	for (int32 i = 0; i < NumPlates; ++i)
-	{
-		FPlateData& Plate = Plates[i];
-		Plate.bIsOceanic = (RngStream.FRand() < OceanicRatio);
-
-		if (Plate.bIsOceanic)
-		{
-			// Gainey's range: deep ocean to shallow shelf
-			Plate.DesiredElevation = -0.8 + RngStream.FRand() * 0.5;  // [-0.8, -0.3]
-		}
-		else
-		{
-			// Gainey's range: coastal plain to high plateau
-			Plate.DesiredElevation = 0.1 + RngStream.FRand() * 0.5;   // [0.1, 0.6]
-		}
+		const int32 PlateIdx = PlateIdPerSite[Site];
+		VoronoiCellColors[Site] = Plates.IsValidIndex(PlateIdx)
+			? Plates[PlateIdx].PackedColor
+			: 0xFFFFFFFF;
 	}
 }
 
