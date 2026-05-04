@@ -35,6 +35,12 @@ void FCBTResource_Interface::PrimeTrianglesBuffers(const TArray<FVector3_HighLow
     CPU_SphericalTriangles_HalfEdges_Buffer = InSphericalTrianglesHalfEdges;
 }
 
+void FCBTResource_Interface::PrimeElevationPerSiteBuffer(const TArray<float>& InElevationPerSite)
+{
+    CPU_ElevationPerSite_Buffer.Empty();
+    CPU_ElevationPerSite_Buffer = InElevationPerSite;
+}
+
 void FCBTResource_Interface::InitFromCPU(const int32 InD, const TArray<FHalfEdge_CBT>& InHalfEdges, const TArray<FVector3_HighLow>& InVertexBuffer, const TArray<FRootBisector_CBT>& InRootBisectors, const TArray<int32>& InCBTBuffer)
 {
 
@@ -172,6 +178,25 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
 		UploadVoronoiGeoMeshFlatToGPU();
 	}
 
+    if (CPU_ElevationPerSite_Buffer.Num() > 0)
+    {
+        const uint32 NumBytes = CPU_ElevationPerSite_Buffer.Num() * sizeof(float);
+        FRHIResourceCreateInfo CreateInfo(TEXT("LargeCBT_ElevationPerSiteBuffer"));
+
+        ElevationPerSiteBuffer_RHI = RHICmdList.CreateVertexBuffer(
+            NumBytes,
+            BUF_ShaderResource | BUF_Static,
+            ERHIAccess::SRVMask,
+            CreateInfo);
+
+        ElevationPerSiteBuffer_SRV = RHICmdList.CreateShaderResourceView(
+            ElevationPerSiteBuffer_RHI,
+            sizeof(float),
+            PF_R32_FLOAT);
+
+        UploadElevationPerSiteBufferToGPU();
+    }
+
 	if (CPU_Voronoi_Cells_Color_Buffer.Num() > 0)
 	{
 		const uint32 NumBytes = CPU_Voronoi_Cells_Color_Buffer.Num() * sizeof(uint32);
@@ -273,7 +298,7 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
 
         check(AllocationCounter_Buffer.UAV);
 
-        // DOWNCAST — this is intentional and correct
+        // DOWNCAST ï¿½ this is intentional and correct
         FRHICommandListImmediate& RHICmdListImmediate =
             static_cast<FRHICommandListImmediate&>(RHICmdList);
 
@@ -320,6 +345,9 @@ void FCBTResource_Interface::ReleaseRHI()
 
 	VoronoiGeoMesh_Flat_SRV.SafeRelease();
 	VoronoiGeoMesh_Flat_Buffer.SafeRelease();
+
+	ElevationPerSiteBuffer_SRV.SafeRelease();
+	ElevationPerSiteBuffer_RHI.SafeRelease();
 
 	HalfEdges_Buffer.Release();
 	Vertex_Buffer.Release();
@@ -599,4 +627,23 @@ void FCBTResource_Interface::UploadPointerBufferToGPU()
 
     FMemory::Memcpy(Dest, CPUPointer_Buffer.GetData(), NumBytes);
     RHIUnlockBuffer(Pointer_Buffer.Buffer);
+}
+
+void FCBTResource_Interface::UploadElevationPerSiteBufferToGPU()
+{
+	if (!ElevationPerSiteBuffer_RHI.IsValid() || CPU_ElevationPerSite_Buffer.Num() == 0)
+	{
+		return;
+	}
+
+	const uint32 NumBytes = CPU_ElevationPerSite_Buffer.Num() * sizeof(float);
+
+	void* Dest = RHILockBuffer(
+		ElevationPerSiteBuffer_RHI,
+		0,
+		NumBytes,
+		RLM_WriteOnly);
+
+	FMemory::Memcpy(Dest, CPU_ElevationPerSite_Buffer.GetData(), NumBytes);
+	RHIUnlockBuffer(ElevationPerSiteBuffer_RHI);
 }

@@ -1123,10 +1123,12 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	}
 
 	GeneratePlates_RedBlobRandomFill();
+	AssignElevations();
 
 	CBTResources = MakeShared<FCBTResource_Interface>();
 	CBTResources->PrimeVoronoiBuffers(VoronoiGeoCenters_HL, VoronoiGeoMesh_Ranges, VoronoiGeoMesh_Flat, VoronoiCellColors);
 	CBTResources->PrimeTrianglesBuffers(FibonacciPoints_HL, SphericalTrisFlat, SphericalHalfEdges);
+	CBTResources->PrimeElevationPerSiteBuffer(ElevationPerSite);
 	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters_HL, RootBisectors_Buffer, CBT_Buffer);
 
 	// CBTResources is now valid — recreate the scene proxy so it captures the new pointer.
@@ -1504,6 +1506,200 @@ TArray<int32> UGeoDelaunatorComponent::GetAncestorChain(int32 StartSite) const
 	}
 	return Chain;  // [StartSite → ... → PlateSeed]
 }
+
+// Given one boundary edge and the two plates on either side,
+// returns the elevation spike or trough at that boundary in [-1.0, +1.0].
+double  UGeoDelaunatorComponent::ComputeBoundaryElevation(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB)
+{
+	// Positive = converging (colliding), negative = diverging (spreading apart)
+	double Pressure = Boundary.Pressure;
+	// Higher of the two resting elevations — crust piles toward the higher plate on collision
+	double MaxDesired = FMath::Max(PlateA.DesiredElevation, PlateB.DesiredElevation);
+	// Lower of the two — crust thins toward the weaker plate on divergence
+	double MinDesired = FMath::Min(PlateA.DesiredElevation, PlateB.DesiredElevation);
+
+	// Exactly one of these three will be true — determines the geological event
+	bool bBothOceanic = PlateA.bIsOceanic && PlateB.bIsOceanic;
+	bool bBothContinental = !PlateA.bIsOceanic && !PlateB.bIsOceanic;
+	bool bSubduction = PlateA.bIsOceanic != PlateB.bIsOceanic;
+
+	if (Pressure > 0.0) // converging
+	{
+		if (bBothContinental)
+			// Head-on collision, neither subducts — crust crumples upward (Himalayas style)
+			// 0.5 multiplier = tallest result of the three converging cases
+			return MaxDesired + Pressure * 0.5;   // high mountain range
+
+		if (bSubduction)
+			// Oceanic plate (denser) dives under continental — continental side rises
+			// 0.3 multiplier = coastal ranges, tall but less extreme than continent-continent
+			// Oceanic trench on the other side is handled by the diverging case or post-pass
+			return MaxDesired + Pressure * 0.3;   // coastal mountains (continental side)
+
+		// bBothOceanic
+		// bBothOceanic — one subducts, creating a volcanic island arc
+		// MaxDesired ~ -0.3 (shallowest oceanic floor)
+		// 0.8 multiplier strong enough to push above 0.0 at sufficient pressure → island chain
+		return MaxDesired + Pressure * 0.8;       // modest island arc
+	}
+
+	// diverging — rift or mid-ocean ridge
+	// Diverging — plates spreading apart, crust thins and sinks
+	// Pressure is negative here, so this subtracts from MinDesired
+	// Produces rift valleys on land or mid-ocean ridges underwater
+	// 0.2 multiplier keeps rifts shallow — dips below plate floor but not drastically
+	return MinDesired + Pressure * 0.2;           // Pressure < 0 → dips lower
+}
+
+// Given one boundary edge and the two plates on either side,
+// returns the elevation spike or trough at that boundary in [-1.0, +1.0].
+// Smooth variant: removes the hard step at Pressure = 0 by blending the base
+// elevation continuously between MinDesired (diverging) and MaxDesired (converging).
+double UGeoDelaunatorComponent::ComputeBoundaryElevation_Gainey(
+    const FPlateBoundary& Boundary,
+    const FPlateData& PlateA,
+    const FPlateData& PlateB)
+{
+    // Positive = converging (colliding), negative = diverging (spreading apart)
+    const double Pressure = Boundary.Pressure;
+
+    // Reference levels: crust piles toward the higher plate on collision,
+    // crust thins toward the lower plate on divergence.
+    const double MaxDesired = FMath::Max(PlateA.DesiredElevation, PlateB.DesiredElevation);
+    const double MinDesired = FMath::Min(PlateA.DesiredElevation, PlateB.DesiredElevation);
+
+    // Tectonic interaction style — picks the geological event multiplier.
+    const bool bBothContinental = !PlateA.bIsOceanic && !PlateB.bIsOceanic;
+    const bool bSubduction      = PlateA.bIsOceanic != PlateB.bIsOceanic;
+    // bBothOceanic = the remaining case
+
+    // Per-style multipliers (kept identical to the original step version):
+    //   0.5 = continent-continent collision  → tallest mountains (Himalayas)
+    //   0.3 = subduction                      → coastal ranges (continental side)
+    //   0.8 = ocean-ocean                     → island arc, can rise above sea level
+    //   0.2 = diverging                       → shallow rifts / mid-ocean ridges
+    const double ConvergeCoeff = bBothContinental ? 0.5 : (bSubduction ? 0.3 : 0.8);
+    const double DivergeCoeff  = 0.2;
+
+    // Smooth blend factor in [0, 1]: 0 = fully diverging regime, 1 = fully converging.
+    // At Pressure = 0 this is exactly 0.5 → Base = mean(Max, Min). No step.
+    // TransitionWidth controls how wide the "transform / neutral" band is
+    // (same units as Pressure). Smaller = sharper change, larger = softer blend.
+    // Default 0.5 covers ~|Pressure| < 1 as the transition zone given drift speeds in [0.5, 1.5].
+    constexpr double TransitionWidth = 0.5;
+    const double x = Pressure / TransitionWidth;
+    const double SmoothSign = x / FMath::Sqrt(1.0 + x * x);   // softsign ∈ (-1, +1)
+    const double t = 0.5 + 0.5 * SmoothSign;                  // ∈ (0, 1)
+
+    // Continuous base elevation — glides from MinDesired through the mean to MaxDesired
+    // as Pressure goes from very negative to very positive. Removes the discontinuity.
+    const double Base = FMath::Lerp(MinDesired, MaxDesired, t);
+
+    // Continuous slope coefficient — also smooths the derivative kink at Pressure = 0,
+    // so the rate of change doesn't jump from 0.2 to 0.5/0.3/0.8 across the neutral line.
+    const double Coeff = FMath::Lerp(DivergeCoeff, ConvergeCoeff, t);
+
+    // Final elevation:
+    //  Pressure > 0 → Coeff * Pressure adds      → rises above the higher plate (mountain)
+    //  Pressure < 0 → Coeff * Pressure subtracts → dips below the lower plate (rift)
+    //  Pressure = 0 → returns the mean of the two plate floors (transform / neutral)
+    return Base + Coeff * Pressure;
+}
+
+void UGeoDelaunatorComponent::AssignElevations()
+{
+	// One elevation slot per Voronoi cell — same count as Fibonacci points
+	const int32 NumSites = PlateIdPerSite.Num();
+	ElevationPerSite.Init(0.0, NumSites);
+
+	// The elevation of the boundary this site was first reached from
+	// Inherited parent-to-child through the BFS — every site in a chain
+	// traces back to the same boundary spike it originated from
+	TArray<double> NearestBoundaryElevation;
+	DistanceToBoundary.Init(INT32_MAX, NumSites);
+	NearestBoundaryElevation.Init(0.0, NumSites);
+
+	// Sites enter when first discovered, processed in order of discovery
+	// = order of distance from boundaries (BFS property)
+	TQueue<int32> Queue;
+
+	// ── Seeding Phase ────────────────────────────────────────────────────────
+	// Seed from all boundary sites
+	// Set distance 0 on every boundary site and push them into the queue.
+	// They are the source — elevation propagates inward from here.
+	for (const FPlateBoundary& Boundary : PlateBoundaries)
+	{
+		const FPlateData& PlateA = Plates[Boundary.PlateA];
+		const FPlateData& PlateB = Plates[Boundary.PlateB];
+
+		// Peak or trough for this boundary — the value the BFS will decay from
+		double BoundaryElev = ComputeBoundaryElevation_Gainey(Boundary, PlateA, PlateB);
+
+		// Each boundary edge touches two sites — one on each plate side
+		for (int32 BoundarySite : { Boundary.SiteA, Boundary.SiteB })
+		{
+			// INT32_MAX check: a site can border multiple plates — only seed it once
+			// from the first boundary that reaches it
+			if (DistanceToBoundary[BoundarySite] == INT32_MAX)
+			{
+				DistanceToBoundary[BoundarySite] = 0; // distance zero — it is the boundary
+				NearestBoundaryElevation[BoundarySite] = BoundaryElev;
+				ElevationPerSite[BoundarySite] = BoundaryElev; // elevation set immediately, no lerp needed
+				Queue.Enqueue(BoundarySite);
+			}
+		}
+	}
+
+	/** ── Propagation Phase ────────────────────────────────────────────────────
+	* Controls how fast boundary elevation fades toward the plate resting floor
+	* Higher = narrower mountains, steeper falloff
+	* Lower  = wider ranges, elevation lingers further inland
+	* At 0.15: after ~7 hops the site is ~35% of the way toward the plate floor
+	* BFS outward — uniform hop cost → BFS ≡ Dijkstra */
+	const double DecayRate = 0.15;
+
+	TArray<int32> Neighbors;
+	TArray<int32> HalfEdgeIndices;  // required by GetVoronoiNeighbors signature, unused here
+
+	// Visits every site exactly once — O(N) total, same cost as plate fill BFS
+	int32 CurrentSite;
+	while (Queue.Dequeue(CurrentSite))
+	{
+		int32  CurrentDist = DistanceToBoundary[CurrentSite];
+		// Look up this site's plate to get its resting elevation (the interior anchor)
+		int32  PlateIdx = PlateIdPerSite[CurrentSite];
+		double DesiredElev = Plates[PlateIdx].DesiredElevation;
+		GetVoronoiNeighbors(CurrentSite, Neighbors, HalfEdgeIndices);
+		for (int32 NeighborSite : Neighbors)
+		{
+			// INT32_MAX = not yet reached → this is its shortest path from a boundary
+			if (DistanceToBoundary[NeighborSite] == INT32_MAX)
+			{
+				int32  NewDist = CurrentDist + 1;
+				// Carry the boundary elevation forward — every site in this chain
+				// traces back to the same original boundary spike
+				double NearestElev = NearestBoundaryElevation[CurrentSite];
+				// Exponential decay: 1.0 at the boundary → approaching 0.0 deep inland
+				// Steep near the boundary, flattening out quickly — natural bell shape — natural mountain profile
+				double DistanceFactor = Sleef_exp_u10(-NewDist * DecayRate);
+
+				DistanceToBoundary[NeighborSite] = NewDist;
+				NearestBoundaryElevation[NeighborSite] = NearestElev;
+
+				// Lerp: DistanceFactor = 1.0 (at boundary)  → pure NearestElev (spike or trench)
+				// DistanceFactor = 0.0 (deep interior) → pure DesiredElev (plate resting floor)
+				ElevationPerSite[NeighborSite] = FMath::Lerp(
+					DesiredElev,   // plate resting elevation (anchor)
+					NearestElev,   // boundary spike or trench
+					DistanceFactor
+				);
+
+				Queue.Enqueue(NeighborSite);
+			}
+		}
+	}
+}
+
 
 uint32 UGeoDelaunatorComponent::BuildPackedColor(const int32 PlateIndex) const
 {

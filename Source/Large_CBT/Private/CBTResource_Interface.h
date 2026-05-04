@@ -28,6 +28,7 @@ private:
 	TArray<FUintVector2> CPU_VoronoiGeoMesh_Ranges_Buffer;
 	TArray<int32> CPU_VoronoiGeoMesh_Flat_Buffer;
 	TArray<uint32> CPU_Voronoi_Cells_Color_Buffer;
+	TArray<float> CPU_ElevationPerSite_Buffer;
 
 	// CPU CBT BUFFERS
 	int32 D{ 0 };
@@ -55,6 +56,9 @@ private:
 	FBufferRHIRef VoronoiCellColors_Buffer;
 	FShaderResourceViewRHIRef VoronoiCellColors_SRV;
 
+	FBufferRHIRef ElevationPerSiteBuffer_RHI;
+	FShaderResourceViewRHIRef ElevationPerSiteBuffer_SRV;
+
 	// GPU CBT buffers
 	FRWBufferStructured HalfEdges_Buffer;     // StructuredBuffer<FHalfEdge_CBT>
 	FRWBufferStructured Vertex_Buffer;
@@ -74,6 +78,7 @@ public:
 	FORCEINLINE FShaderResourceViewRHIRef GetVoronoiGeoMeshRangesSRV() const { return VoronoiGeoMesh_Ranges_SRV; }
 	FORCEINLINE FShaderResourceViewRHIRef GetVoronoiGeoMeshFlatSRV() const { return VoronoiGeoMesh_Flat_SRV; }
 	FORCEINLINE FShaderResourceViewRHIRef GetVoronoiCellColorsSRV() const { return VoronoiCellColors_SRV; }
+	FORCEINLINE FShaderResourceViewRHIRef GetElevationPerSiteSRV() const { return ElevationPerSiteBuffer_SRV; }
 
 	/** Returns true if the two required GPU buffers have been initialized. */
 	FORCEINLINE bool IsGPUReady() const { return FibonacciPoints_Buffer.SRV.IsValid() && SphericalTriangles_Buffer.SRV.IsValid(); }
@@ -99,6 +104,8 @@ public:
 		const TArray<FRootBisector_CBT>& InRootBisectors,
 		const TArray<int32>& InCBTBuffer);
 
+	void PrimeElevationPerSiteBuffer(const TArray<float>& InElevationPerSite);
+
 private:
 
 	virtual void InitRHI(FRHICommandListBase& RHICmdList) override;
@@ -119,5 +126,5 @@ private:
 	void UploadCBTToGPU();
 	void UploadAllocationCounterToGPU();
 	void UploadPointerBufferToGPU();
-
+	void UploadElevationPerSiteBufferToGPU();
 };

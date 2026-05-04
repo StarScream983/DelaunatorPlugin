@@ -38,6 +38,7 @@ struct FGeoVoronoiIndirectInstancingUserData : public FOneFrameResource
 	FRHIShaderResourceView* VoronoiGeoMeshRangesSRV = nullptr;
 	FRHIShaderResourceView* VoronoiGeoMeshFlatSRV = nullptr;
 	FRHIShaderResourceView* VoronoiCellColorsSRV = nullptr;
+	FRHIShaderResourceView* ElevationPerSiteSRV = nullptr;
 };
 
 /*

@@ -149,6 +149,7 @@ StructuredBuffer<FVector3_HighLow> VoronoiGeoCenters;
 StructuredBuffer<uint2> VoronoiGeoMeshRanges; // or uint2 if you change CPU type
 StructuredBuffer<int> VoronoiGeoMeshFlat;
 Buffer<uint> VoronoiCellColors;
+Buffer<float> ElevationPerSite;     // PF_R32_FLOAT, indexed by SiteId / Voronoi cell index
 
 /** Reconstruct double-precision position from HighLow pair (as float math on GPU). */
 float3 ReconstructPosition(FVector3_HighLow v)

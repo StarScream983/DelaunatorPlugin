@@ -393,6 +393,7 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 		UserData->VoronoiGeoMeshRangesSRV = nullptr;
 		UserData->VoronoiGeoMeshFlatSRV = nullptr;
 		UserData->VoronoiCellColorsSRV = nullptr;
+		UserData->ElevationPerSiteSRV = nullptr;
 
 		if (CBTResources.IsValid() && CBTResources->IsGPUReady())
 		{
@@ -402,6 +403,7 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 			UserData->VoronoiGeoMeshRangesSRV = CBTResources->GetVoronoiGeoMeshRangesSRV();
 			UserData->VoronoiGeoMeshFlatSRV = CBTResources->GetVoronoiGeoMeshFlatSRV();
 			UserData->VoronoiCellColorsSRV = CBTResources->GetVoronoiCellColorsSRV();
+			UserData->ElevationPerSiteSRV = CBTResources->GetElevationPerSiteSRV();
 		}
 
 		UserData->LodViewOrigin = (FVector3f)MainView->ViewMatrices.GetViewOrigin();

@@ -395,8 +395,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100", UIMin = "100"), Category = "GeoDelaunator") 
 	int32 N = 100; // number of Fibonacci points
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100.0", UIMin = "100.0"), Category = "GeoDelaunator")
+	double PlanetRadius = 3000.0;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1.0", UIMin = "1.0"), Category = "GeoDelaunator")
-	double PlanetRadius = 1.0;
+	double MaxElevation = 10.0; // Everest ~ 8.8km, Mariana ~ -11km
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0.0", UIMin = "0.0", ClampMax = "1.0", UIMax = "1.0"), Category = "GeoDelaunator")
 	double Jitter = 1.0;
@@ -495,6 +497,9 @@ protected:
 	TArray<FPlateData> Plates;  // chosen root sites, replaces PlateSeeds
 	TArray<FPlateBoundary> PlateBoundaries;
 	TArray<int32> SiteParent;  // -1 = seed (root), else = the site that propagated into this one
+	TArray<float> ElevationPerSite;        // [-1 = deep ocean, +1 = high mountain]
+	// How many hops each site is from its nearest boundary, INT32_MAX = not yet visited (used as the "unvisited" sentinel)
+	TArray<int32> DistanceToBoundary;      // useful later for moisture + rivers
 	TArray<uint32> PlateDebugColors;  // optional packed color per site
 
 	void GeneratePlates_RedBlobRandomFill();
@@ -502,6 +507,10 @@ protected:
 	// add fisher-yates shuffle to randomize the order of neighbors and avoid similar plate IDs
 	TArray<int32> PickRandomPlateSeeds(int32 Count, TArray<FPlateData>& OutSeeds);
 	TArray<int32> GetAncestorChain(int32 StartSite) const;
+	double  ComputeBoundaryElevation(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
+	double  ComputeBoundaryElevation_Gainey(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
+	void AssignElevations();
+
 	uint32 BuildPackedColor(const int32 PlateIndex) const;
 	void BuildPlateDebugColors();
 
