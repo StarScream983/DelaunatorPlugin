@@ -1407,6 +1407,12 @@ void UGeoDelaunatorComponent::GeneratePlates_RedBlobRandomFill()
 				const FVector BoundaryNormal =
 					(FibonacciPoints[NeighborSite] - FibonacciPoints[CurrentSite]).GetSafeNormal();
 
+				// Tangent along the boundary on the sphere surface.
+				// Cross of the local radial (Fibonacci point ≈ unit normal at the surface) with
+				// the boundary normal gives the direction perpendicular to both → along the border.
+				const FVector BoundaryTangent =
+					FVector::CrossProduct(FibonacciPoints[CurrentSite], BoundaryNormal).GetSafeNormal();
+
 				FPlateBoundary Boundary;
 				Boundary.SiteA = CurrentSite;
 				Boundary.SiteB = NeighborSite;
@@ -1415,6 +1421,7 @@ void UGeoDelaunatorComponent::GeneratePlates_RedBlobRandomFill()
 				Boundary.HalfEdgeAB = GlobalAB;
 				Boundary.HalfEdgeBA = GlobalBA;
 				Boundary.Pressure = (double)FVector::DotProduct(RelativeMotion, BoundaryNormal);
+				Boundary.Shear    = FMath::Abs((double)FVector::DotProduct(RelativeMotion, BoundaryTangent));
 				PlateBoundaries.Add(Boundary);
 			}
 		}
@@ -1606,11 +1613,197 @@ double UGeoDelaunatorComponent::ComputeBoundaryElevation_Gainey(
     return Base + Coeff * Pressure;
 }
 
+// Hybrid: Gainey's regime classification + convergence/shear/dormant branches,
+// with the divergence branch anchored on MinElev so divergent boundaries depress
+// below the lower plate floor (rift valleys, oceanic trenches).
+//
+// IMPORTANT: StressSaturation is tuned for raw inputs whose magnitude is at most
+// |DriftSpeedA + DriftSpeedB| ≈ 3.0. If you change drift speeds, retune this.
+// (Gainey used 30 because his raw stress was in the dozens; ours peaks at ~3.)
+double UGeoDelaunatorComponent::ComputeBoundaryElevation_Hybrid(
+    const FPlateBoundary& Boundary,
+    const FPlateData& PlateA,
+    const FPlateData& PlateB)
+{
+    // Tune to ~half your maximum raw pressure for a balanced response curve.
+    // 1.0 maps raw |Pressure| = 3 → sigmoid ≈ ±0.9, raw |Pressure| = 1 → ±0.46.
+    constexpr double StressSaturation = 1.5;
+
+    auto Sigmoid = [](double Raw) -> double
+    {
+        return 2.0 / (1.0 + FMath::Exp(-Raw / StressSaturation)) - 1.0;
+    };
+
+    const double Pressure = Sigmoid(Boundary.Pressure);   // ∈ [-1, +1] (signed)
+    const double Shear    = Sigmoid(Boundary.Shear);      // ∈ [ 0, +1] (magnitude)
+
+    const double ElevA = PlateA.DesiredElevation;
+    const double ElevB = PlateB.DesiredElevation;
+    const double MaxElev = FMath::Max(ElevA, ElevB);
+    const double MinElev = FMath::Min(ElevA, ElevB);
+
+    // Strong convergence — Gainey: rises above MaxElev, linear in pressure.
+    if (Pressure > 0.3)
+        return MaxElev + Pressure;
+
+    // Strong divergence — DEVIATION FROM GAINEY: anchor on MinElev with negative
+    // offset so divergent boundaries actually depress below the lower plate floor.
+    // Pressure < 0 here → MinElev + Pressure*0.25 < MinElev → trench / rift.
+    if (Pressure < -0.3)
+        return MinElev + Pressure * 0.25;
+
+    // Transform / shearing — Gainey: small uplift along strike-slip faults.
+    if (Shear > 0.3)
+        return MaxElev + Shear * 0.125;
+
+    // Dormant — Gainey: mean of the two plate floors.
+    return (ElevA + ElevB) * 0.5;
+}
+// Continuous version: no discrete regime branches. Same four "modes" as the hybrid,
+// blended with smooth weights from pressure/shear so crossing a threshold is not a step.
+double UGeoDelaunatorComponent::ComputeBoundaryElevation_Hybrid2(
+	const FPlateBoundary& Boundary,
+	const FPlateData& PlateA,
+	const FPlateData& PlateB)
+{
+	constexpr double StressSaturation = 1.0;
+	auto Sigmoid = [](double Raw) -> double
+	{
+		return 2.0 / (1.0 + FMath::Exp(-Raw / StressSaturation)) - 1.0;
+	};
+	const double Pressure = Sigmoid(Boundary.Pressure);   // [-1, +1] signed
+	const double Shear    = Sigmoid(Boundary.Shear);      // [0, +1] style (raw shear >= 0)
+	const double ElevA = PlateA.DesiredElevation;
+	const double ElevB = PlateB.DesiredElevation;
+	const double MaxElev = FMath::Max(ElevA, ElevB);
+	const double MinElev = FMath::Min(ElevA, ElevB);
+	const double MeanElev = (ElevA + ElevB) * 0.5;
+	// Per-mode boundary elevation (same formulas as the old hybrid branches).
+	const double EConv  = MaxElev + Pressure;              // convergent uplift
+	const double EDiv   = MinElev + Pressure * 0.25;          // divergent trough (your deviation)
+	const double EShear = MaxElev + Shear * 0.125;            // strike-slip bump (Gainey scale)
+	const double EDorm  = MeanElev;
+	// Soft weights: replace Gainey's |P|>0.3 checks with ramps. Tune Edge0/Edge1
+	// to control how "wide" the transition band is (narrower = closer to sharp thresholds).
+	const double WConvRaw  = FMath::SmoothStep(0.10, 0.40, Pressure);   // grows with +P
+	const double WDivRaw   = FMath::SmoothStep(0.10, 0.40, -Pressure);  // grows with -P
+	// Shear only contributes when pressure is not already picking conv or div strongly.
+	const double WShearRaw = FMath::SmoothStep(0.12, 0.42, Shear)
+		* (1.0 - FMath::Max(WConvRaw, WDivRaw));
+	double Wc = WConvRaw;
+	double Wd = WDivRaw;
+	double Ws = WShearRaw;
+	// If conv+div+shear sum past 1, scale them down so the blend stays convex.
+	double Wsum = Wc + Wd + Ws;
+	if (Wsum > 1.0 - KINDA_SMALL_NUMBER)
+	{
+		const double Inv = 1.0 / Wsum;
+		Wc *= Inv;
+		Wd *= Inv;
+		Ws *= Inv;
+	}
+	const double W0 = 1.0 - Wc - Wd - Ws; // dormant / "quiet" contribution
+	return W0 * EDorm + Wc * EConv + Wd * EDiv + Ws * EShear;
+}
+
+// ── Boundary stress smoothing ───────────────────────────────────────────────────
+// Faithful port of Gainey's blurPlateBoundaryStress(boundaryCorners, 3, 0.4).
+//
+// Two FPlateBoundary entries are neighbours when they share a Voronoi site
+// (i.e. they connect along the same plate-edge curve). Each iteration replaces
+// every boundary's (Pressure, Shear) with a center-weighted blend of itself
+// and the mean of its neighbours:
+//
+//     new = own * CenterWeight + mean(neighbours) * (1 - CenterWeight)
+//
+// Effect: high-frequency variation in BoundaryNormal direction (concave/convex
+// pockets along curving borders) gets averaged out, so adjacent boundary cells
+// no longer randomly straddle the |Pressure| > 0.3 regime threshold and no
+// longer produce single-cell elevation spikes.
+//
+// Implementation note: scatter/gather with per-site accumulators — no nested
+// loops, no TMap, no per-boundary neighbour list. The trick is that the sum of
+// all boundaries touching either endpoint site of boundary B already equals
+// (sum over neighbours of B) + 2*B (B contributes once at each of its sites).
+// Subtract 2*B and you have the neighbour sum directly.
+void UGeoDelaunatorComponent::BlurBoundaryStress(int32 Iterations, double CenterWeight)
+{
+	const int32 NumB = PlateBoundaries.Num();
+	if (NumB == 0 || Iterations <= 0) return;
+
+	const int32  NumSites       = PlateIdPerSite.Num();
+	const double NeighborWeight = 1.0 - CenterWeight;
+
+	// Per-site accumulators — reused each iteration via Memzero rather than reallocated
+	TArray<double> SitePressureSum; SitePressureSum.SetNumZeroed(NumSites);
+	TArray<double> SiteShearSum;    SiteShearSum   .SetNumZeroed(NumSites);
+	TArray<int32>  SiteCount;       SiteCount      .SetNumZeroed(NumSites);
+
+	// Output buffers — written in full each iteration so the pass is non-destructive
+	TArray<double> NewPressure; NewPressure.SetNumUninitialized(NumB);
+	TArray<double> NewShear;    NewShear   .SetNumUninitialized(NumB);
+
+	for (int32 Iter = 0; Iter < Iterations; ++Iter)
+	{
+		// Reset accumulators in place — cheaper than reallocating
+		FMemory::Memzero(SitePressureSum.GetData(), sizeof(double) * NumSites);
+		FMemory::Memzero(SiteShearSum   .GetData(), sizeof(double) * NumSites);
+		FMemory::Memzero(SiteCount      .GetData(), sizeof(int32)  * NumSites);
+
+		// ── Scatter: every boundary deposits its values into its two endpoint sites ──
+		for (int32 i = 0; i < NumB; ++i)
+		{
+			const FPlateBoundary& B = PlateBoundaries[i];
+			SitePressureSum[B.SiteA] += B.Pressure;
+			SitePressureSum[B.SiteB] += B.Pressure;
+			SiteShearSum   [B.SiteA] += B.Shear;
+			SiteShearSum   [B.SiteB] += B.Shear;
+			SiteCount      [B.SiteA] += 1;
+			SiteCount      [B.SiteB] += 1;
+		}
+
+		// ── Gather: each boundary reads its neighbour mean from the site sums ──
+		// Self appears once in each of its two site sums, so subtract 2*self to exclude it.
+		for (int32 i = 0; i < NumB; ++i)
+		{
+			const FPlateBoundary& B = PlateBoundaries[i];
+			const double SumP  = SitePressureSum[B.SiteA] + SitePressureSum[B.SiteB] - 2.0 * B.Pressure;
+			const double SumS  = SiteShearSum   [B.SiteA] + SiteShearSum   [B.SiteB] - 2.0 * B.Shear;
+			const int32  Count = SiteCount[B.SiteA] + SiteCount[B.SiteB] - 2;
+
+			if (Count > 0)
+			{
+				const double Inv = 1.0 / Count;
+				NewPressure[i] = B.Pressure * CenterWeight + SumP * Inv * NeighborWeight;
+				NewShear   [i] = B.Shear    * CenterWeight + SumS * Inv * NeighborWeight;
+			}
+			else
+			{
+				// Isolated boundary edge — keep as-is
+				NewPressure[i] = B.Pressure;
+				NewShear   [i] = B.Shear;
+			}
+		}
+
+		// ── Commit: copy this iteration's results back so the next iteration sees them ──
+		for (int32 i = 0; i < NumB; ++i)
+		{
+			PlateBoundaries[i].Pressure = NewPressure[i];
+			PlateBoundaries[i].Shear    = NewShear[i];
+		}
+	}
+}
+
 void UGeoDelaunatorComponent::AssignElevations()
 {
 	// One elevation slot per Voronoi cell — same count as Fibonacci points
 	const int32 NumSites = PlateIdPerSite.Num();
 	ElevationPerSite.Init(0.0, NumSites);
+
+	// ── Stress smoothing pass (Gainey: blurPlateBoundaryStress, 3 iters @ 0.4) ──
+	// Has to run BEFORE ComputeBoundaryElevation_Hybrid is consumed below, otherwise
+	// adjacent boundaries with near-threshold pressures keep producing single-cell spikes.
+	BlurBoundaryStress(/*Iterations=*/3, /*CenterWeight=*/0.4);
 
 	// The elevation of the boundary this site was first reached from
 	// Inherited parent-to-child through the BFS — every site in a chain
@@ -1625,28 +1818,43 @@ void UGeoDelaunatorComponent::AssignElevations()
 
 	// ── Seeding Phase ────────────────────────────────────────────────────────
 	// Seed from all boundary sites
-	// Set distance 0 on every boundary site and push them into the queue.
-	// They are the source — elevation propagates inward from here.
+    // Set distance 0 on every boundary site and push them into the queue.
+    // They are the source — elevation propagates inward from here.
+	// FIX (replaces old "first-touched-wins"): a boundary site usually has 2–3
+	// cross-plate edges. The previous loop captured only the first edge that
+	// reached it during iteration; every other edge's contribution was dropped,
+	// which produced iteration-order-dependent single-cell elevation spikes.
+	//
+	// Now: accumulate every boundary's elevation into the sites it touches,
+	// then assign each site the average. Smooth, deterministic, no spikes.
+	TArray<double> BoundarySum;   BoundarySum.Init(0.0, NumSites);
+	TArray<int32>  BoundaryCount; BoundaryCount.Init(0,  NumSites);
+
 	for (const FPlateBoundary& Boundary : PlateBoundaries)
 	{
 		const FPlateData& PlateA = Plates[Boundary.PlateA];
 		const FPlateData& PlateB = Plates[Boundary.PlateB];
 
 		// Peak or trough for this boundary — the value the BFS will decay from
-		double BoundaryElev = ComputeBoundaryElevation_Gainey(Boundary, PlateA, PlateB);
+		const double BoundaryElev = ComputeBoundaryElevation_Hybrid2(Boundary, PlateA, PlateB);
 
-		// Each boundary edge touches two sites — one on each plate side
-		for (int32 BoundarySite : { Boundary.SiteA, Boundary.SiteB })
+		// Each boundary edge contributes to both of its endpoint sites
+		BoundarySum  [Boundary.SiteA] += BoundaryElev;
+		BoundarySum  [Boundary.SiteB] += BoundaryElev;
+		BoundaryCount[Boundary.SiteA] += 1;
+		BoundaryCount[Boundary.SiteB] += 1;
+	}
+
+	// Materialise per-site averages and seed the BFS queue
+	for (int32 Site = 0; Site < NumSites; ++Site)
+	{
+		if (BoundaryCount[Site] > 0)
 		{
-			// INT32_MAX check: a site can border multiple plates — only seed it once
-			// from the first boundary that reaches it
-			if (DistanceToBoundary[BoundarySite] == INT32_MAX)
-			{
-				DistanceToBoundary[BoundarySite] = 0; // distance zero — it is the boundary
-				NearestBoundaryElevation[BoundarySite] = BoundaryElev;
-				ElevationPerSite[BoundarySite] = BoundaryElev; // elevation set immediately, no lerp needed
-				Queue.Enqueue(BoundarySite);
-			}
+			const double Avg = BoundarySum[Site] / BoundaryCount[Site];
+			DistanceToBoundary[Site]       = 0;     // distance zero — it is the boundary
+			NearestBoundaryElevation[Site] = Avg;   // inland decay anchor
+			ElevationPerSite[Site]         = Avg;   // boundary cells take their average outright
+			Queue.Enqueue(Site);
 		}
 	}
 
@@ -1656,7 +1864,7 @@ void UGeoDelaunatorComponent::AssignElevations()
 	* Lower  = wider ranges, elevation lingers further inland
 	* At 0.15: after ~7 hops the site is ~35% of the way toward the plate floor
 	* BFS outward — uniform hop cost → BFS ≡ Dijkstra */
-	const double DecayRate = 0.15;
+	const double DecayRate = 0.30;
 
 	TArray<int32> Neighbors;
 	TArray<int32> HalfEdgeIndices;  // required by GetVoronoiNeighbors signature, unused here

@@ -2,20 +2,22 @@
 
 Sources used to derive the planet generation pipeline, in priority order.
 
-## Priority
-
-**Andy Gainey is the primary reference.** Reuse his pipeline structure
-(subdivided icosahedron → Delaunay → Voronoi dual → tectonics → climate →
-biomes). Substitute squeakyspacebar or Red Blob Games only when their code is
-cleaner / better suited for a specific step. Red Blob is largely a simplified
-re‑implementation of Gainey's approach.
+**REDBLOB is the primary reference.** we follow REDBLOB's steps, REDBLOB simplies a lot of code for his minimal goals, we wanna avoid that, we use full implementation from all the reference but we change the code to have realistic results, follow users requests. 
 
 When a step is implemented from a non‑primary source, log which one in
 `VORONOI_PLANET_Implementation.md`.
 
 ---
 
-## 1. Andy Gainey  (primary)
+## 1. Red Blob Games  (clarity / dual‑mesh details)
+
+- **Observable notebook** — *1843 Planet Generation*. Simplified, well‑visualised
+  port of Gainey's pipeline; useful when the original is hard to follow:
+  https://www.redblobgames.com/x/1843-planet-generation/
+- **Companion repo**:
+  https://github.com/redblobgames/1843-planet-generation/
+
+## 2. Andy Gainey  (primary)
 
 - **Blog write‑up** — full algorithm walkthrough, the source‑of‑truth
   description of every pipeline stage:
@@ -24,7 +26,7 @@ When a step is implemented from a non‑primary source, log which one in
   the blog post describes; Gainey's live site is unreliable, so use this:
   https://web.archive.org/web/20200531054229/http://experilous.com/1/project/planet-generator/2014-09-28/planet-generator.js
 
-## 2. squeakyspacebar  (use when its code beats Gainey's)
+## 3. squeakyspacebar  (use when its code beats Gainey's)
 
 - **Blog post** — *Procedural Map Generation With Voronoi Diagrams*. Strong
   treatment of plate generation / assignment and Lloyd relaxation:
@@ -32,21 +34,12 @@ When a step is implemented from a non‑primary source, log which one in
 - **`novatellus` repo** — Python implementation accompanying the post:
   https://github.com/squeakyspacebar/novatellus/tree/develop
 
-## 3. Red Blob Games  (clarity / dual‑mesh details)
 
-- **Observable notebook** — *1843 Planet Generation*. Simplified, well‑visualised
-  port of Gainey's pipeline; useful when the original is hard to follow:
-  https://www.redblobgames.com/x/1843-planet-generation/
-- **Companion repo**:
-  https://github.com/redblobgames/1843-planet-generation/
-
-
-# BONUS REPO
+# BONUS REPOS
  - https://namishh.com/blog/devlogs/planet
  - https://github.com/namishh/planet/tree/master
 
 ---
-
 
 # BIOME IMPLEMENTATION:
 

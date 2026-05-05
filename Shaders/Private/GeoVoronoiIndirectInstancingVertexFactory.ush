@@ -71,7 +71,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
         VertexPos = V2;
     }
 
-    const float ElevationScale = 0.01f;   // 5% of planet radius — exaggerated for visibility
+    const float ElevationScale = 0.05f;   // 5% of planet radius — exaggerated for visibility
     const float Radius = GeoVoronoiIndirectInstancingParams.PlanetRadius * (1.0f + Elev * ElevationScale);
     Intermediates.LocalPos = VertexPos * Radius;
     //Intermediates.LocalPos = VertexPos * GeoVoronoiIndirectInstancingParams.PlanetRadius;

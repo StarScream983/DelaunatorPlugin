@@ -280,7 +280,8 @@ struct FPlateBoundary
 	int32  HalfEdgeAB = -1;   // SitePrefixSums[SiteA] + local ring idx → SiteB
 	int32  HalfEdgeBA = -1;   // SitePrefixSums[SiteB] + local ring idx → SiteA 
 
-	double Pressure = 0.0;  // >0 converging, <0 diverging
+	double Pressure  = 0.0;  // dot(RelativeMotion, BoundaryNormal),  >0 = converge, <0 = diverge
+    double Shear     = 0.0;  // |dot(RelativeMotion, BoundaryTangent)|, >=0
 	double Elevation = 0.0;  // computed boundary elevation
 };
 
@@ -487,7 +488,8 @@ public:
 
 protected:
 
-	const double OceanicRatio = 0.7;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0.2", UIMin = "0.2", ClampMax = "0.9", UIMax="0.9"), Category = "GeoDelaunator")
+	double OceanicRatio = 0.47;
 
 	// TECTONIC PLATES
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator")
@@ -509,6 +511,15 @@ protected:
 	TArray<int32> GetAncestorChain(int32 StartSite) const;
 	double  ComputeBoundaryElevation(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
 	double  ComputeBoundaryElevation_Gainey(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
+	double  ComputeBoundaryElevation_Hybrid(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
+	double  ComputeBoundaryElevation_Hybrid2(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
+
+	// Mirror of Gainey's blurPlateBoundaryStress(): smooth Pressure/Shear across
+	// adjacent PlateBoundaries before they get classified into elevation regimes.
+	// Removes high-frequency speckle that otherwise creates single-cell spikes when
+	// neighbouring boundary edges fall on opposite sides of the |x| > 0.3 threshold.
+	void BlurBoundaryStress(int32 Iterations, double CenterWeight);
+
 	void AssignElevations();
 
 	uint32 BuildPackedColor(const int32 PlateIndex) const;
