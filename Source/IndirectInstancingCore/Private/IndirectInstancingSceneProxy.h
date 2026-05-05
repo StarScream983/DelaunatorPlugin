@@ -6,6 +6,9 @@
 #include "CoreMinimal.h"
 #include "PrimitiveSceneProxy.h"
 #include "Materials/MaterialRenderProxy.h"
+#include "UObject/WeakInterfacePtr.h"
+
+#include "GeoDelaunatorComponent_Interface.h"
 
 class FCBTResource_Interface;
 
@@ -60,6 +63,9 @@ public:
 
 	/** Render-thread pointer to CBT GPU resources. Lifetime owned by UGeoDelaunatorComponent. */
 	TSharedPtr<FCBTResource_Interface> CBTResources;
+
+	/** Weak ref to render-facing subset of the owner (`IGeoDelaunatorComponent_Interface`). */
+	TWeakInterfacePtr<IGeoDelaunatorComponent_Interface> GeoOwner;
 };
 
 //  Notes: Looks like GetMeshShaderMap is returning nullptr during the DepthPass

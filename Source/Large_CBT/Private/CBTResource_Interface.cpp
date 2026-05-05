@@ -41,6 +41,12 @@ void FCBTResource_Interface::PrimeElevationPerSiteBuffer(const TArray<float>& In
     CPU_ElevationPerSite_Buffer = InElevationPerSite;
 }
 
+void FCBTResource_Interface::PrimeDistanceToBoundaryNormPerSiteBuffer(const TArray<float>& InDistanceNormPerSite)
+{
+	CPU_DistanceToBoundaryNormPerSite_Buffer.Empty();
+	CPU_DistanceToBoundaryNormPerSite_Buffer = InDistanceNormPerSite;
+}
+
 void FCBTResource_Interface::InitFromCPU(const int32 InD, const TArray<FHalfEdge_CBT>& InHalfEdges, const TArray<FVector3_HighLow>& InVertexBuffer, const TArray<FRootBisector_CBT>& InRootBisectors, const TArray<int32>& InCBTBuffer)
 {
 
@@ -197,6 +203,25 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
         UploadElevationPerSiteBufferToGPU();
     }
 
+	if (CPU_DistanceToBoundaryNormPerSite_Buffer.Num() > 0)
+	{
+		const uint32 NumBytes = CPU_DistanceToBoundaryNormPerSite_Buffer.Num() * sizeof(float);
+		FRHIResourceCreateInfo CreateInfo(TEXT("LargeCBT_DistanceToBoundaryNormPerSiteBuffer"));
+
+		DistanceToBoundaryNormPerSiteBuffer_RHI = RHICmdList.CreateVertexBuffer(
+			NumBytes,
+			BUF_ShaderResource | BUF_Static,
+			ERHIAccess::SRVMask,
+			CreateInfo);
+
+		DistanceToBoundaryNormPerSiteBuffer_SRV = RHICmdList.CreateShaderResourceView(
+			DistanceToBoundaryNormPerSiteBuffer_RHI,
+			sizeof(float),
+			PF_R32_FLOAT);
+
+		UploadDistanceToBoundaryNormPerSiteBufferToGPU();
+	}
+
 	if (CPU_Voronoi_Cells_Color_Buffer.Num() > 0)
 	{
 		const uint32 NumBytes = CPU_Voronoi_Cells_Color_Buffer.Num() * sizeof(uint32);
@@ -348,6 +373,9 @@ void FCBTResource_Interface::ReleaseRHI()
 
 	ElevationPerSiteBuffer_SRV.SafeRelease();
 	ElevationPerSiteBuffer_RHI.SafeRelease();
+
+	DistanceToBoundaryNormPerSiteBuffer_SRV.SafeRelease();
+	DistanceToBoundaryNormPerSiteBuffer_RHI.SafeRelease();
 
 	HalfEdges_Buffer.Release();
 	Vertex_Buffer.Release();
@@ -646,4 +674,23 @@ void FCBTResource_Interface::UploadElevationPerSiteBufferToGPU()
 
 	FMemory::Memcpy(Dest, CPU_ElevationPerSite_Buffer.GetData(), NumBytes);
 	RHIUnlockBuffer(ElevationPerSiteBuffer_RHI);
+}
+
+void FCBTResource_Interface::UploadDistanceToBoundaryNormPerSiteBufferToGPU()
+{
+	if (!DistanceToBoundaryNormPerSiteBuffer_RHI.IsValid() || CPU_DistanceToBoundaryNormPerSite_Buffer.Num() == 0)
+	{
+		return;
+	}
+
+	const uint32 NumBytes = CPU_DistanceToBoundaryNormPerSite_Buffer.Num() * sizeof(float);
+
+	void* Dest = RHILockBuffer(
+		DistanceToBoundaryNormPerSiteBuffer_RHI,
+		0,
+		NumBytes,
+		RLM_WriteOnly);
+
+	FMemory::Memcpy(Dest, CPU_DistanceToBoundaryNormPerSite_Buffer.GetData(), NumBytes);
+	RHIUnlockBuffer(DistanceToBoundaryNormPerSiteBuffer_RHI);
 }

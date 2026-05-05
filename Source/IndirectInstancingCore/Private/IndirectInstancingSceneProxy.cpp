@@ -262,6 +262,7 @@ FGeoVoronoiIndirectInstancingSceneProxy::FGeoVoronoiIndirectInstancingSceneProxy
 
 	// Capture the CBT GPU resource pointer (lifetime owned by UGeoDelaunatorComponent)
 	CBTResources = InComponent->GetCBTResources();
+	GeoOwner = InComponent;
 }
 
 SIZE_T FGeoVoronoiIndirectInstancingSceneProxy::GetTypeHash() const
@@ -386,6 +387,13 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 			&Collector.AllocateOneFrameResource<FGeoVoronoiIndirectInstancingUserData>();
 		BatchElement.UserData = UserData;
 
+		uint32 ColorDebugMode = 0;
+		if (IGeoDelaunatorComponent_Interface* RenderData = GeoOwner.Get())
+		{
+			ColorDebugMode = RenderData->GetPlanetColorDebugShaderValue_RenderThread();
+		}
+		UserData->ColorDebugMode = ColorDebugMode;
+
 		UserData->InstanceBufferSRV = DrawBuffers.InstanceBufferSRV;
 		UserData->CBT_FibonacciPointsSRV = nullptr;
 		UserData->CBT_SphericalTrianglesSRV = nullptr;
@@ -394,6 +402,7 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 		UserData->VoronoiGeoMeshFlatSRV = nullptr;
 		UserData->VoronoiCellColorsSRV = nullptr;
 		UserData->ElevationPerSiteSRV = nullptr;
+		UserData->DistanceToBoundaryNormPerSiteSRV = nullptr;
 
 		if (CBTResources.IsValid() && CBTResources->IsGPUReady())
 		{
@@ -404,6 +413,7 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 			UserData->VoronoiGeoMeshFlatSRV = CBTResources->GetVoronoiGeoMeshFlatSRV();
 			UserData->VoronoiCellColorsSRV = CBTResources->GetVoronoiCellColorsSRV();
 			UserData->ElevationPerSiteSRV = CBTResources->GetElevationPerSiteSRV();
+			UserData->DistanceToBoundaryNormPerSiteSRV = CBTResources->GetDistanceToBoundaryNormPerSiteSRV();
 		}
 
 		UserData->LodViewOrigin = (FVector3f)MainView->ViewMatrices.GetViewOrigin();

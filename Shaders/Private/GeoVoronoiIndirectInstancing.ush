@@ -150,6 +150,7 @@ StructuredBuffer<uint2> VoronoiGeoMeshRanges; // or uint2 if you change CPU type
 StructuredBuffer<int> VoronoiGeoMeshFlat;
 Buffer<uint> VoronoiCellColors;
 Buffer<float> ElevationPerSite;     // PF_R32_FLOAT, indexed by SiteId / Voronoi cell index
+Buffer<float> DistanceToBoundaryNormPerSite; // 0..1 normalized hop distance from plate boundary (AssignElevations BFS)
 
 /** Reconstruct double-precision position from HighLow pair (as float math on GPU). */
 float3 ReconstructPosition(FVector3_HighLow v)
@@ -201,4 +202,116 @@ float4 UnpackColorRGBA8(uint PackedColor)
     float B = (float) ((PackedColor >> 16) & 0xFF) / 255.0f;
     float A = (float) ((PackedColor >> 24) & 0xFF) / 255.0f;
     return float4(R, G, B, A);
+}
+
+float4 HashUIntToColor(uint x)
+{
+    x ^= x << 13u;
+    x ^= x >> 17u;
+    x ^= x << 5u;
+    float r = float((x >> 0u) & 255u) / 255.0f;
+    float g = float((x >> 8u) & 255u) / 255.0f;
+    float b = float((x >> 16u) & 255u) / 255.0f;
+    return float4(r, g, b, 1.0f);
+}
+
+/** JS colormap bytes are display sRGB; UE BaseColor / lit shading expect linear reflectance. */
+float3 GeoVoronoiSrgbUnitToLinear(float3 Srgb)
+{
+    const float3 Lo = Srgb / 12.92f;
+    const float3 Hi = pow((Srgb + 0.055f) / 1.055f, 2.4f);
+    return lerp(Lo, Hi, step(0.04045f, Srgb));
+}
+
+float4 GeoVoronoiRedBlob1843ColormapPackLinear(float3 RgbByte0To255)
+{
+    const float3 Srgb = RgbByte0To255 / 255.0f;
+    return float4(GeoVoronoiSrgbUnitToLinear(Srgb), 1.0f);
+}
+
+/**
+ * Pixel-for-pixel logic of Red Blob `colormap.js` (width=64, height=64 LUT generator).
+ * https://github.com/redblobgames/1843-planet-generation/blob/main/colormap.js
+ * Order matters: three middle-column overrides run before `e < 0` / land, same as JS.
+ * For vertex shading, round to nearest column: e = 2*x/width - 1  =>  x ≈ round((e+1)*width/2).
+ * Returns **linear** RGB so Default Lit + tonemapper match browsing the PNG / WebGL demo.
+ */
+float4 GeoVoronoiRedBlob1843Colormap(float Elev, float Moisture)
+{
+    static const float Width = 64.0f;
+    const float e = clamp(Elev, -1.0f, 1.0f);
+    float m = saturate(Moisture);
+
+    int xi = (int) round((e + 1.0f) * 0.5f * Width);
+    xi = clamp(xi, 0, (int) Width - 1);
+
+    const int HalfW = (int)(Width * 0.5f); // exports.width/2 in JS (32 for 64-wide)
+    if (xi == HalfW - 1)
+    {
+        return GeoVoronoiRedBlob1843ColormapPackLinear(float3(48.0f, 120.0f, 160.0f));
+    }
+    if (xi == HalfW - 2)
+    {
+        return GeoVoronoiRedBlob1843ColormapPackLinear(float3(48.0f, 100.0f, 150.0f));
+    }
+    if (xi == HalfW - 3)
+    {
+        return GeoVoronoiRedBlob1843ColormapPackLinear(float3(48.0f, 80.0f, 140.0f));
+    }
+
+    if (e < 0.0f)
+    {
+        const float r = 48.0f + 48.0f * e;
+        const float g = 64.0f + 64.0f * e;
+        const float b = 127.0f + 127.0f * e;
+        return GeoVoronoiRedBlob1843ColormapPackLinear(float3(r, g, b));
+    }
+
+    float eland = e;
+    m *= (1.0f - eland);
+    float r = 210.0f - 100.0f * m;
+    float g = 185.0f - 45.0f * m;
+    float b = 139.0f - 45.0f * m;
+    r = 255.0f * eland + r * (1.0f - eland);
+    g = 255.0f * eland + g * (1.0f - eland);
+    b = 255.0f * eland + b * (1.0f - eland);
+    return GeoVoronoiRedBlob1843ColormapPackLinear(float3(r, g, b));
+}
+
+/** Mode matches `EGeoVoronoiPlanetColorDebug` on CPU. */
+float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint PackedCellColor, float DistNorm)
+{
+    if (Mode == 0u)
+    {
+        return UnpackColorRGBA8(PackedCellColor);
+    }
+    if (Mode == 1u)
+    {
+        float t = saturate(Elev * 0.5f + 0.5f);
+        float3 c0 = float3(0.05f, 0.15f, 0.65f);
+        float3 c1 = float3(0.15f, 0.85f, 0.35f);
+        float3 c2 = float3(0.90f, 0.20f, 0.10f);
+        float3 rgb = (t < 0.5f) ? lerp(c0, c1, t * 2.0f) : lerp(c1, c2, (t - 0.5f) * 2.0f);
+        return float4(rgb, 1.0f);
+    }
+    if (Mode == 2u)
+    {
+        return HashUIntToColor(SiteId);
+    }
+    // Mode 3: Red Blob 1843 colormap — continuous e like colormap.js (no stair-step quantization).
+    if (Mode == 3u)
+    {
+        float eCl = clamp(Elev, -1.0f, 1.0f);
+        float moisture = saturate(0.72f - 0.55f * DistNorm);
+        return GeoVoronoiRedBlob1843Colormap(eCl, moisture);
+    }
+    if (Mode == 4u)
+    {
+        float t = saturate(DistNorm);
+        float3 cNear = float3(0.15f, 0.55f, 0.95f);
+        float3 cFar = float3(0.95f, 0.25f, 0.12f);
+        float3 rgb = lerp(cNear, cFar, t);
+        return float4(rgb, 1.0f);
+    }
+    return HashUIntToColor(SiteId);
 }

@@ -13,6 +13,7 @@
 #include <functional>
 #include <array>
 #include "CBTStructs.h"
+#include "GeoDelaunatorComponent_Interface.h"
 #include "GeoDelaunatorComponent.generated.h"
 
 class FCBTResource_Interface;
@@ -285,8 +286,22 @@ struct FPlateBoundary
 	double Elevation = 0.0;  // computed boundary elevation
 };
 
+/** VertexColor / debug visualization for the Voronoi planet vertex factory (`ColorDebugMode` in HLSL). */
+UENUM(BlueprintType)
+enum class EGeoVoronoiPlanetColorDebug : uint8
+{
+	/** `VoronoiCellColors` (plate-tinted cells). */
+	VoronoiPlateColors = 0,
+	/** Pseudocolor from `ElevationPerSite`. */
+	ElevationHeatmap = 1,
+	/** Deterministic RGB from site index. */
+	SiteIdHash = 2,
+	OceanLandMask = 3,       // Red Blob 1843 `colormap.js` elevation colors (ocean depth + land→white peaks)
+	DistanceToBoundary = 4, // heatmap of BFS distance — confirms mountain shapes
+};
+
 UCLASS(Blueprintable, ClassGroup = (Custom), meta = (BlueprintSpawnableComponent), hideCategories = (Activation, Collision, Cooking, HLOD, Navigation, Object, Physics, VirtualTexture))
-class DELAUNATORPLUGIN_API UGeoDelaunatorComponent : public UPrimitiveComponent, public IInterface_CollisionDataProvider
+class DELAUNATORPLUGIN_API UGeoDelaunatorComponent : public UPrimitiveComponent, public IInterface_CollisionDataProvider, public IGeoDelaunatorComponent_Interface
 {
 	GENERATED_UCLASS_BODY()
 
@@ -410,6 +425,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1.0", UIMin = "1.0", ClampMax = "12.0", UIMax = "12.0"), Category = "GeoDelaunator")
 	float DebugLineThickness = 1.f;
 
+	/** Per-cell color mode for indirect planet rendering (mirrored each tick into `PlanetColorDebugShaderValue` for the render thread). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Debug")
+	EGeoVoronoiPlanetColorDebug PlanetColorDebug = EGeoVoronoiPlanetColorDebug::VoronoiPlateColors;
+
 	UPROPERTY()
 	UDelaunator* Delaunator = nullptr;
 
@@ -454,9 +473,23 @@ protected:
 	TArray<FPointer_CBT> Pointer_Buffer;*/
 
 	TSharedPtr<FCBTResource_Interface> CBTResources;
+
+	/** Game thread: `SyncPlanetColorDebugToRenderThread`; render thread: `GetPlanetColorDebugShaderValue_RenderThread`. */
+	TAtomic<uint32> PlanetColorDebugShaderValue;
+
 public:
 	FORCEINLINE float GetPlanetRadius() const { return (float)PlanetRadius; }
 	FORCEINLINE TSharedPtr<FCBTResource_Interface> GetCBTResources() const { return CBTResources; }
+
+	//~ Begin IGeoDelaunatorComponent_Interface
+	virtual uint32 GetPlanetColorDebugShaderValue_RenderThread() const override;
+	//~ End IGeoDelaunatorComponent_Interface
+
+	/** Call from game thread (Tick / property changes) so the scene proxy can read a stable value on the render thread. */
+	FORCEINLINE void SyncPlanetColorDebugToRenderThread()
+	{
+		PlanetColorDebugShaderValue = static_cast<uint32>(PlanetColorDebug);
+	}
 
 public:
 	
@@ -495,7 +528,7 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator")
 	int32 NumPlates = 24;
 
-	TArray<int32> PlateIdPerSite;     // size = FibonacciPoints.Num(), value = seed site id
+	TArray<int32> PlateIdPerSite;     // size = FibonacciPoints.Num(), value = plate index into `Plates`
 	TArray<FPlateData> Plates;  // chosen root sites, replaces PlateSeeds
 	TArray<FPlateBoundary> PlateBoundaries;
 	TArray<int32> SiteParent;  // -1 = seed (root), else = the site that propagated into this one
@@ -519,6 +552,19 @@ protected:
 	// Removes high-frequency speckle that otherwise creates single-cell spikes when
 	// neighbouring boundary edges fall on opposite sides of the |x| > 0.3 threshold.
 	void BlurBoundaryStress(int32 Iterations, double CenterWeight);
+
+	/**
+	 * Red Blob Games 1843 `assignRegionElevation` (planet-generation.js). Writes into `OutElevation`
+	 * (pass `ElevationPerSite` from `AssignElevations_RedBlob1843` if you want the main height buffer).
+	 */
+	void AssignElevationFromRedBlob1843(TArray<float>& OutElevation);
+	void RedBlobAssignDistanceField(const TSet<int32>& Seeds, const TSet<int32>& StopBlocks, TArray<float>& OutDist);
+
+	/** BFS hops from `PlateBoundaries` → `DistanceToBoundary` (for Red Blob path; Gainey fills this inside its own BFS). */
+	void FillDistanceToBoundaryBFS();
+
+	/** Alternative pipeline: blur stress → Red Blob 1843 heightfield → boundary-distance BFS. Same `ElevationPerSite` + `DistanceToBoundary` as Gainey. */
+	void AssignElevations_RedBlob1843();
 
 	void AssignElevations();
 

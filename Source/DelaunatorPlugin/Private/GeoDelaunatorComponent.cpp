@@ -41,6 +41,8 @@ UGeoDelaunatorComponent::UGeoDelaunatorComponent(const FObjectInitializer& Objec
 	bEnableAutoLODGeneration = false;
 #endif
 	Mobility = EComponentMobility::Static;
+
+	SyncPlanetColorDebugToRenderThread();
 }
 
 void UGeoDelaunatorComponent::OnRegister()
@@ -77,6 +79,11 @@ FPrimitiveSceneProxy* UGeoDelaunatorComponent::CreateSceneProxy()
 {
 	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::CreateSceneProxy"));
 	return new FGeoVoronoiIndirectInstancingSceneProxy(this);
+}
+
+uint32 UGeoDelaunatorComponent::GetPlanetColorDebugShaderValue_RenderThread() const
+{
+	return static_cast<uint32>(PlanetColorDebugShaderValue);
 }
 
 void UGeoDelaunatorComponent::SetMaterial(int32 InElementIndex, UMaterialInterface* InMaterial)
@@ -208,6 +215,8 @@ void UGeoDelaunatorComponent::BeginPlay()
 
 	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::BeginPlay after GeoDelauny, CBTResources valid=%d"),
 		CBTResources.IsValid() ? 1 : 0);
+
+	SyncPlanetColorDebugToRenderThread();
 }
 
 void UGeoDelaunatorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -257,6 +266,20 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		ImGui::Text("CBT Buffer: %d", CBT_Buffer.Num());
 		ImGui::Text("Voronoi Sites: %d", VoronoiGeoCenters.Num());
 		ImGui::Text("Triangles: %d", SphericalTriangles.Num());
+
+		static const char* PlanetColorDebugLabels[] =
+		{
+			"Voronoi / plate colors",
+			"Elevation heatmap",
+			"SiteId hash",
+			"1843 colormap (Red Blob)",
+			"Distance to boundary (BFS)",
+		};
+		int32 ColorDbgIdx = static_cast<int32>(PlanetColorDebug);
+		if (ImGui::Combo("Planet color debug", &ColorDbgIdx, PlanetColorDebugLabels, UE_ARRAY_COUNT(PlanetColorDebugLabels)))
+		{
+			PlanetColorDebug = static_cast<EGeoVoronoiPlanetColorDebug>(FMath::Clamp(ColorDbgIdx, 0, 4));
+		}
 	}
 	ImGui::End();
 #pragma endregion PLANET_GENERAL_DATA_WINDOW
@@ -514,6 +537,8 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 #pragma endregion CBT_DEBUG_WINDOW
 
 #endif
+
+	SyncPlanetColorDebugToRenderThread();
 
 	// SPHERE DELAUNAY DEBUG DRAW
 	const FTransform& ComponentTransform = GetComponentTransform();
@@ -1123,12 +1148,35 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	}
 
 	GeneratePlates_RedBlobRandomFill();
+	//AssignElevations_RedBlob1843();
 	AssignElevations();
+
+	// CAN THIS BE INTEGRATED INTO THE ASSIGN ELEVATIONS FUNCTION, DURING THE BFS FOR BOUNDARY DEFINITION
+	const int32 NumSitesForDebug = PlateIdPerSite.Num();
+	TArray<float> DistanceToBoundaryNorm;
+	DistanceToBoundaryNorm.SetNumUninitialized(NumSitesForDebug);
+	int32 MaxBoundaryDist = 1;
+	for (int32 Si = 0; Si < NumSitesForDebug; ++Si)
+	{
+		const int32 d = DistanceToBoundary[Si];
+		if (d != INT32_MAX && d > MaxBoundaryDist)
+		{
+			MaxBoundaryDist = d;
+		}
+	}
+	const float InvMaxBoundaryDist = 1.0f / static_cast<float>(MaxBoundaryDist);
+	for (int32 Si = 0; Si < NumSitesForDebug; ++Si)
+	{
+		const int32 d = DistanceToBoundary[Si];
+		DistanceToBoundaryNorm[Si] = (d == INT32_MAX) ? 0.0f : static_cast<float>(d) * InvMaxBoundaryDist;
+	}
+	//*******************************************************************
 
 	CBTResources = MakeShared<FCBTResource_Interface>();
 	CBTResources->PrimeVoronoiBuffers(VoronoiGeoCenters_HL, VoronoiGeoMesh_Ranges, VoronoiGeoMesh_Flat, VoronoiCellColors);
 	CBTResources->PrimeTrianglesBuffers(FibonacciPoints_HL, SphericalTrisFlat, SphericalHalfEdges);
 	CBTResources->PrimeElevationPerSiteBuffer(ElevationPerSite);
+	CBTResources->PrimeDistanceToBoundaryNormPerSiteBuffer(DistanceToBoundaryNorm);
 	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters_HL, RootBisectors_Buffer, CBT_Buffer);
 
 	// CBTResources is now valid — recreate the scene proxy so it captures the new pointer.
@@ -1706,6 +1754,239 @@ double UGeoDelaunatorComponent::ComputeBoundaryElevation_Hybrid2(
 	return W0 * EDorm + Wc * EConv + Wd * EDiv + Ws * EShear;
 }
 
+namespace
+{
+/** fBm matching planet-generation.js weights; uses smooth Perlin (Red Blob uses Simplex — same role). */
+double RedBlobFbmNoiseOctaves(double X, double Y, double Z)
+{
+	constexpr double Persistence = 2.0 / 3.0;
+	double Sum = 0.0;
+	double SumAmp = 0.0;
+	for (int32 Octave = 0; Octave < 5; ++Octave)
+	{
+		const double F = static_cast<double>(1 << Octave);
+		const double Amp = FMath::Pow(Persistence, static_cast<double>(Octave));
+		const FVector P(
+			static_cast<float>(X * F),
+			static_cast<float>(Y * F),
+			static_cast<float>(Z * F));
+		Sum += Amp * static_cast<double>(FMath::PerlinNoise3D(P));
+		SumAmp += Amp;
+	}
+	return SumAmp > KINDA_SMALL_NUMBER ? (Sum / SumAmp) : 0.0;
+}
+
+static constexpr float RedBlobDistInf = 1.0e30f;
+
+static bool RedBlobDistIsInf(float D) { return D > (RedBlobDistInf * 1.0e-6f); }
+}
+
+void UGeoDelaunatorComponent::RedBlobAssignDistanceField(
+	const TSet<int32>& Seeds,
+	const TSet<int32>& StopBlocks,
+	TArray<float>& OutDist)
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	if (NumSites == 0)
+	{
+		OutDist.Reset();
+		return;
+	}
+
+	OutDist.Init(RedBlobDistInf, NumSites);
+	TArray<int32> Queue;
+	Queue.Reserve(NumSites / 8);
+	for (const int32 Seed : Seeds)
+	{
+		if (!OutDist.IsValidIndex(Seed))
+		{
+			continue;
+		}
+		OutDist[Seed] = 0.f;
+		Queue.Add(Seed);
+	}
+
+	TArray<int32> Neighbors;
+	TArray<int32> HalfEdgeIdxUnused;
+	int32 QOut = 0;
+	while (QOut < Queue.Num())
+	{
+		const int32 Span = Queue.Num() - QOut;
+		const int32 PickOffset = (Span > 1) ? RngStream.RandRange(0, Span - 1) : 0;
+		const int32 Pick = QOut + PickOffset;
+		const int32 Current = Queue[Pick];
+		Queue[Pick] = Queue[QOut];
+		++QOut;
+
+		const float BaseDist = OutDist[Current];
+		GetVoronoiNeighbors(Current, Neighbors, HalfEdgeIdxUnused);
+		for (const int32 Neighbor : Neighbors)
+		{
+			if (StopBlocks.Contains(Neighbor))
+			{
+				continue;
+			}
+			if (RedBlobDistIsInf(OutDist[Neighbor]))
+			{
+				OutDist[Neighbor] = BaseDist + 1.f;
+				Queue.Add(Neighbor);
+			}
+		}
+	}
+}
+
+void UGeoDelaunatorComponent::AssignElevationFromRedBlob1843(TArray<float>& OutElevation)
+{
+	// Faithful to planet-generation.js assignRegionElevation + findCollisions + assignDistanceField:
+	// https://github.com/redblobgames/1843-planet-generation/blob/main/planet-generation.js
+	const int32 NumSites = PlateIdPerSite.Num();
+	if (NumSites == 0)
+	{
+		OutElevation.Reset();
+		return;
+	}
+
+	OutElevation.SetNumUninitialized(NumSites);
+
+	// Plate motion MUST match JS generatePlates: unit chord from seed to first circulated neighbor,
+	// then findCollisions moves positions by plate_vec[r_plate[r]] * deltaTime only (no extra speed).
+	TArray<FVector> RedBlobPlateUnitAtSeed;
+	RedBlobPlateUnitAtSeed.Init(FVector::ZeroVector, NumSites);
+	TArray<int32> Neighbors;
+	TArray<int32> HalfEdgeIdxUnused;
+	for (int32 Pi = 0; Pi < Plates.Num(); ++Pi)
+	{
+		const int32 SeedR = Plates[Pi].SeedSite;
+		if (!FibonacciPoints.IsValidIndex(SeedR))
+		{
+			continue;
+		}
+		GetVoronoiNeighbors(SeedR, Neighbors, HalfEdgeIdxUnused);
+		if (Neighbors.Num() == 0)
+		{
+			continue;
+		}
+		const FVector Chord = FibonacciPoints[Neighbors[0]] - FibonacciPoints[SeedR];
+		const FVector Dir = Chord.GetSafeNormal();
+		if (!Dir.IsNearlyZero())
+		{
+			RedBlobPlateUnitAtSeed[SeedR] = Dir;
+		}
+	}
+
+	constexpr double DeltaTime = 1.0e-2;
+	constexpr double CollisionScale = 0.75;
+	const double CollideThresh = CollisionScale * DeltaTime;
+
+	TSet<int32> MountainSeedSites;
+	TSet<int32> CoastlineSites;
+	TSet<int32> OceanSites;
+
+	for (int32 CurrentR = 0; CurrentR < NumSites; ++CurrentR)
+	{
+		const int32 PlateIdxA = PlateIdPerSite[CurrentR];
+		double BestCompression = TNumericLimits<double>::Max();
+		int32 BestR = -1;
+		GetVoronoiNeighbors(CurrentR, Neighbors, HalfEdgeIdxUnused);
+		for (const int32 NeighborR : Neighbors)
+		{
+			const int32 PlateIdxB = PlateIdPerSite[NeighborR];
+			if (PlateIdxA == PlateIdxB)
+			{
+				continue;
+			}
+
+			const FVector& P0 = FibonacciPoints[CurrentR];
+			const FVector& P1 = FibonacciPoints[NeighborR];
+			const int32 SeedA = Plates[PlateIdxA].SeedSite;
+			const int32 SeedB = Plates[PlateIdxB].SeedSite;
+			const FVector U0 = RedBlobPlateUnitAtSeed[SeedA] * static_cast<float>(DeltaTime);
+			const FVector U1 = RedBlobPlateUnitAtSeed[SeedB] * static_cast<float>(DeltaTime);
+			const double D0 = FVector::Dist(P0, P1);
+			const double D1 = FVector::Dist(P0 + U0, P1 + U1);
+			const double Compression = D0 - D1;
+			if (Compression < BestCompression)
+			{
+				BestCompression = Compression;
+				BestR = NeighborR;
+			}
+		}
+
+		if (BestR == -1)
+		{
+			continue;
+		}
+
+		const int32 PlateIdxB = PlateIdPerSite[BestR];
+		const bool bCollided = BestCompression > CollideThresh;
+		const bool bOceanA = Plates[PlateIdxA].bIsOceanic;
+		const bool bOceanB = Plates[PlateIdxB].bIsOceanic;
+
+		if (bOceanA && bOceanB)
+		{
+			if (bCollided) { CoastlineSites.Add(CurrentR); }
+			else { OceanSites.Add(CurrentR); }
+		}
+		else if (!bOceanA && !bOceanB)
+		{
+			if (bCollided)
+			{
+				MountainSeedSites.Add(Plates[PlateIdxA].SeedSite);
+			}
+		}
+		else
+		{
+			if (bCollided) { MountainSeedSites.Add(CurrentR); }
+			else { CoastlineSites.Add(CurrentR); }
+		}
+	}
+
+	for (int32 R = 0; R < NumSites; ++R)
+	{
+		const int32 PIdx = PlateIdPerSite[R];
+		if (Plates[PIdx].SeedSite != R)
+		{
+			continue;
+		}
+		if (Plates[PIdx].bIsOceanic)
+		{
+			OceanSites.Add(R);
+		}
+		else
+		{
+			CoastlineSites.Add(R);
+		}
+	}
+
+	TSet<int32> StopR;
+	for (const int32 S : MountainSeedSites) { StopR.Add(S); }
+	for (const int32 S : CoastlineSites) { StopR.Add(S); }
+	for (const int32 S : OceanSites) { StopR.Add(S); }
+
+	TArray<float> DistA, DistB, DistC;
+	RedBlobAssignDistanceField(MountainSeedSites, OceanSites, DistA);
+	RedBlobAssignDistanceField(OceanSites, CoastlineSites, DistB);
+	RedBlobAssignDistanceField(CoastlineSites, StopR, DistC);
+
+	constexpr double Epsilon = 1.0e-3;
+	for (int32 R = 0; R < NumSites; ++R)
+	{
+		const double A = static_cast<double>(DistA[R]) + Epsilon;
+		const double B = static_cast<double>(DistB[R]) + Epsilon;
+		const double C = static_cast<double>(DistC[R]) + Epsilon;
+		double E = 0.1;
+		if (!(RedBlobDistIsInf(DistA[R]) && RedBlobDistIsInf(DistB[R])))
+		{
+			E = (1.0 / A - 1.0 / B) / (1.0 / A + 1.0 / B + 1.0 / C);
+		}
+
+		const FVector& P = FibonacciPoints[R];
+		const double Noise = RedBlobFbmNoiseOctaves(static_cast<double>(P.X), static_cast<double>(P.Y), static_cast<double>(P.Z));
+		E += 0.1 * Noise;
+		OutElevation[R] = static_cast<float>(E);
+	}
+}
+
 // ── Boundary stress smoothing ───────────────────────────────────────────────────
 // Faithful port of Gainey's blurPlateBoundaryStress(boundaryCorners, 3, 0.4).
 //
@@ -1792,6 +2073,59 @@ void UGeoDelaunatorComponent::BlurBoundaryStress(int32 Iterations, double Center
 			PlateBoundaries[i].Shear    = NewShear[i];
 		}
 	}
+}
+
+void UGeoDelaunatorComponent::FillDistanceToBoundaryBFS()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	DistanceToBoundary.Init(INT32_MAX, NumSites);
+	TQueue<int32> Queue;
+
+	auto TryEnqueueBoundarySite = [&](int32 Site)
+	{
+		if (!DistanceToBoundary.IsValidIndex(Site))
+		{
+			return;
+		}
+		if (DistanceToBoundary[Site] == INT32_MAX)
+		{
+			DistanceToBoundary[Site] = 0;
+			Queue.Enqueue(Site);
+		}
+	};
+
+	for (const FPlateBoundary& Boundary : PlateBoundaries)
+	{
+		TryEnqueueBoundarySite(Boundary.SiteA);
+		TryEnqueueBoundarySite(Boundary.SiteB);
+	}
+
+	TArray<int32> Neighbors;
+	TArray<int32> HalfEdgeIndicesUnused;
+	int32 CurrentSite = 0;
+	while (Queue.Dequeue(CurrentSite))
+	{
+		const int32 CurDist = DistanceToBoundary[CurrentSite];
+		GetVoronoiNeighbors(CurrentSite, Neighbors, HalfEdgeIndicesUnused);
+		for (const int32 Neighbor : Neighbors)
+		{
+			if (DistanceToBoundary[Neighbor] == INT32_MAX)
+			{
+				DistanceToBoundary[Neighbor] = CurDist + 1;
+				Queue.Enqueue(Neighbor);
+			}
+		}
+	}
+}
+
+void UGeoDelaunatorComponent::AssignElevations_RedBlob1843()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	ElevationPerSite.Init(0.0f, NumSites);
+
+	BlurBoundaryStress(/*Iterations=*/3, /*CenterWeight=*/0.4);
+	AssignElevationFromRedBlob1843(ElevationPerSite);
+	FillDistanceToBoundaryBFS();
 }
 
 void UGeoDelaunatorComponent::AssignElevations()

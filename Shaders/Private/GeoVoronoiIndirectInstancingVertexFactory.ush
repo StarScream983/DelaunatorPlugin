@@ -7,6 +7,7 @@
 
 StructuredBuffer<QuadRenderInstance> InstanceBuffer;
 float3 LodViewOrigin;
+uint ColorDebugMode;
 
 struct FVertexFactoryInput
 {
@@ -48,9 +49,11 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
     Intermediates.SceneData = VF_GPUSCENE_GET_INTERMEDIATES(Input);
 
     const QuadRenderInstance Instance = InstanceBuffer[Input.InstanceId];
-    Intermediates.VertexColor = UnpackColorRGBA8(VoronoiCellColors[Instance.SiteId]);
-
+    //Intermediates.VertexColor = UnpackColorRGBA8(VoronoiCellColors[Instance.SiteId]);
+    const uint PackedCell = VoronoiCellColors[Instance.SiteId];
     const float Elev = ElevationPerSite[Instance.SiteId];
+    const float DistNorm = DistanceToBoundaryNormPerSite[Instance.SiteId];
+    Intermediates.VertexColor = GeoVoronoiPickDebugVertexColor(ColorDebugMode, Instance.SiteId, Elev, PackedCell, DistNorm);
 
 
     const float3 V0 = ReconstructPosition(VoronoiGeoCenters[Instance.GeoCenterA]);
@@ -71,8 +74,9 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
         VertexPos = V2;
     }
 
-    const float ElevationScale = 0.05f;   // 5% of planet radius — exaggerated for visibility
-    const float Radius = GeoVoronoiIndirectInstancingParams.PlanetRadius * (1.0f + Elev * ElevationScale);
+    // Red Blob heights are subtle vs plate floors; scale up so radial lift reads at game scale.
+    const float ElevationScale = 0.01f;
+    const float Radius = GeoVoronoiIndirectInstancingParams.PlanetRadius * (1.0f + Elev*ElevationScale);
     Intermediates.LocalPos = VertexPos * Radius;
     //Intermediates.LocalPos = VertexPos * GeoVoronoiIndirectInstancingParams.PlanetRadius;
     Intermediates.WorldNormal = normalize(cross(V1 - V0, V2 - V0));

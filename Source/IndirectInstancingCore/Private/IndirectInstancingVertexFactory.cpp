@@ -64,6 +64,8 @@ public:
 		VoronoiGeoMeshFlatParameter.Bind(ParameterMap, TEXT("VoronoiGeoMeshFlat"));
 		VoronoiCellColorsParameter.Bind(ParameterMap, TEXT("VoronoiCellColors"));
 		ElevationPerSiteParameter.Bind(ParameterMap, TEXT("ElevationPerSite"));
+		DistanceToBoundaryNormPerSiteParameter.Bind(ParameterMap, TEXT("DistanceToBoundaryNormPerSite"));
+		ColorDebugModeParameter.Bind(ParameterMap, TEXT("ColorDebugMode"));
 	}
 
 	void GetElementShaderBindings(
@@ -112,6 +114,14 @@ public:
 		{
 			ShaderBindings.Add(ElevationPerSiteParameter, UserData->ElevationPerSiteSRV);
 		}
+		if (DistanceToBoundaryNormPerSiteParameter.IsBound() && UserData->DistanceToBoundaryNormPerSiteSRV)
+		{
+			ShaderBindings.Add(DistanceToBoundaryNormPerSiteParameter, UserData->DistanceToBoundaryNormPerSiteSRV);
+		}
+		if (ColorDebugModeParameter.IsBound())
+		{
+			ShaderBindings.Add(ColorDebugModeParameter, UserData->ColorDebugMode);
+		}
 	}
 
 protected:
@@ -124,6 +134,8 @@ protected:
 	LAYOUT_FIELD(FShaderResourceParameter, VoronoiGeoMeshFlatParameter);
 	LAYOUT_FIELD(FShaderResourceParameter, VoronoiCellColorsParameter);
 	LAYOUT_FIELD(FShaderResourceParameter, ElevationPerSiteParameter);
+	LAYOUT_FIELD(FShaderResourceParameter, DistanceToBoundaryNormPerSiteParameter);
+	LAYOUT_FIELD(FShaderParameter, ColorDebugModeParameter);
 };
 
 IMPLEMENT_TYPE_LAYOUT(FGeoVoronoiIndirectInstancingShaderParameters);
