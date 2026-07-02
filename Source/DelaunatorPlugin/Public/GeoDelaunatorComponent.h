@@ -577,6 +577,7 @@ protected:
 
 	// MINECRAFT TERRAIN STYLE FUNCTIONS
 	void BuildErosionControlPerSite();
+	void BuildErosionControlPerSite_Slope();
 
 	// COLOR DEBUGGING
 	uint32 BuildPackedColor(const int32 PlateIndex) const;

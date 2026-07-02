@@ -1151,7 +1151,8 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	GeneratePlates_RedBlobRandomFill();
 	//AssignElevations_RedBlob1843();
 	AssignElevations();
-	BuildErosionControlPerSite();
+	//BuildErosionControlPerSite();
+	BuildErosionControlPerSite_Slope();
 
 	/**IT CAN BE ADDED TO THE SECOND PASS OF THE BFS, FROM BOUDARY TO PLATE CENTER,
 	*  WHERE THE DISTANCE TO BOUNDARY IS CALCULATED SIMULTANEOUSLY AS THE ELEVATION ASSIGNMENT, 
@@ -2302,6 +2303,80 @@ void UGeoDelaunatorComponent::BuildErosionControlPerSite()
 
 		float E = static_cast<float>(0.65 * t + 0.35 * n);
 		ErosionControlPerSite[R] = FMath::Clamp(2.0f * E - 1.0f, -1.0f, 1.0f);
+	}
+}
+
+void UGeoDelaunatorComponent::BuildErosionControlPerSite_Slope()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	ErosionControlPerSite.SetNumUninitialized(NumSites);
+
+	TArray<int32> Neighbors;
+	TArray<int32> HalfEdgeIndices;
+
+	constexpr float MaxDropForFullErosion = 0.15f;
+	constexpr float MaxProminenceForFullErosion = 0.06f; // 0.08f
+	constexpr float MaxElevationForFullErosion = 0.40f; // 0.45f
+	constexpr float CoastElevationCutoff = 0.03f;
+	constexpr float ThermalWeight = 0.90f;
+	constexpr float NoiseWeight = 0.10f;
+
+	for (int32 R = 0; R < NumSites; ++R)
+	{
+		const float CurrentElevation = ElevationPerSite[R];
+
+		const FVector& P = FibonacciPoints[R];
+		const double n = RedBlobFbmNoiseOctaves(P.X * 0.01, P.Y * 0.01, P.Z * 0.01);
+		const float Noise01 = FMath::Clamp(static_cast<float>(n * 0.5 + 0.5), 0.0f, 1.0f);
+
+		if (CurrentElevation < 0.0f)
+		{
+			ErosionControlPerSite[R] = 0.0f;
+			continue;
+		}
+
+		GetVoronoiNeighbors(R, Neighbors, HalfEdgeIndices);
+
+		bool bTouchesOcean = false;
+		float MaxDrop = 0.0f;
+		float NeighborSum = 0.0f;
+		int32 NeighborCount = 0;
+
+		for (int32 NeighborSite : Neighbors)
+		{
+			const float NeighborElevation = ElevationPerSite[NeighborSite];
+
+			if (NeighborElevation < 0.0f)
+			{
+				bTouchesOcean = true;
+				continue;
+			}
+
+			MaxDrop = FMath::Max(MaxDrop, CurrentElevation - NeighborElevation);
+			NeighborSum += NeighborElevation;
+			++NeighborCount;
+		}
+
+		if ((bTouchesOcean && CurrentElevation < CoastElevationCutoff) || NeighborCount == 0)
+		{
+			ErosionControlPerSite[R] = 0.0f;
+			continue;
+		}
+
+		const float NeighborAvg = NeighborSum / static_cast<float>(NeighborCount);
+
+		// Slope catches steep downhill faces; prominence catches local summit caps;
+		// elevation catches broad high mountain masses that are locally smooth.
+		const float Slope01 = FMath::Clamp(MaxDrop / MaxDropForFullErosion, 0.0f, 1.0f);
+		const float Prominence = FMath::Max(0.0f, CurrentElevation - NeighborAvg);
+		const float Peak01 = FMath::Clamp(Prominence / MaxProminenceForFullErosion, 0.0f, 1.0f);
+		const float Elevation01 = FMath::Clamp(CurrentElevation / MaxElevationForFullErosion, 0.0f, 1.0f);
+		const float Thermal01 = FMath::Max3(Slope01, Peak01, Elevation01);
+
+		ErosionControlPerSite[R] = FMath::Clamp(
+			ThermalWeight * Thermal01 + NoiseWeight * Noise01,
+			0.0f,
+			1.0f);
 	}
 }
 #pragma endregion

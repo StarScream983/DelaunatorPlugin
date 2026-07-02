@@ -316,11 +316,11 @@ float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint P
     }
     if (Mode == 5u)
     {
-        // -1 = rugged (red), +1 = flat (blue)
-        float t = saturate(ErosionControl * 0.5f + 0.5f);
-        float3 cRugged = float3(0.95f, 0.25f, 0.12f);
-        float3 cFlat = float3(0.15f, 0.55f, 0.95f);
-        float3 rgb = lerp(cRugged, cFlat, t);
+        // 0 = low erosion (red), 1 = high erosion (blue)
+        float t = saturate(ErosionControl);
+        float3 cLowErosion = float3(0.95f, 0.25f, 0.12f);
+        float3 cHighErosion = float3(0.15f, 0.55f, 0.95f);
+        float3 rgb = lerp(cLowErosion, cHighErosion, t);
         return float4(rgb, 1.0f);
     }
     return HashUIntToColor(SiteId);
