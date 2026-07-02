@@ -53,7 +53,8 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
     const uint PackedCell = VoronoiCellColors[Instance.SiteId];
     const float Elev = ElevationPerSite[Instance.SiteId];
     const float DistNorm = DistanceToBoundaryNormPerSite[Instance.SiteId];
-    Intermediates.VertexColor = GeoVoronoiPickDebugVertexColor(ColorDebugMode, Instance.SiteId, Elev, PackedCell, DistNorm);
+    const float ErosionCtrl = ErosionControlPerSite[Instance.SiteId];
+    Intermediates.VertexColor = GeoVoronoiPickDebugVertexColor(ColorDebugMode, Instance.SiteId, Elev, PackedCell, DistNorm, ErosionCtrl);
 
 
     const float3 V0 = ReconstructPosition(VoronoiGeoCenters[Instance.GeoCenterA]);
@@ -75,7 +76,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
     }
 
     // Red Blob heights are subtle vs plate floors; scale up so radial lift reads at game scale.
-    const float ElevationScale = 0.01f;
+    const float ElevationScale = 0.02f;
     const float Radius = GeoVoronoiIndirectInstancingParams.PlanetRadius * (1.0f + Elev*ElevationScale);
     Intermediates.LocalPos = VertexPos * Radius;
     //Intermediates.LocalPos = VertexPos * GeoVoronoiIndirectInstancingParams.PlanetRadius;

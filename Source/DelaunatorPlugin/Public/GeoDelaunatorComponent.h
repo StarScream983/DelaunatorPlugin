@@ -298,6 +298,7 @@ enum class EGeoVoronoiPlanetColorDebug : uint8
 	SiteIdHash = 2,
 	OceanLandMask = 3,       // Red Blob 1843 `colormap.js` elevation colors (ocean depth + land→white peaks)
 	DistanceToBoundary = 4, // heatmap of BFS distance — confirms mountain shapes
+	ErosionControl = 5,     // Minecraft erosion axis per site [-1 rugged, +1 flat]
 };
 
 UCLASS(Blueprintable, ClassGroup = (Custom), meta = (BlueprintSpawnableComponent), hideCategories = (Activation, Collision, Cooking, HLOD, Navigation, Object, Physics, VirtualTexture))
@@ -537,6 +538,12 @@ protected:
 	TArray<int32> DistanceToBoundary;      // useful later for moisture + rivers
 	TArray<uint32> PlateDebugColors;  // optional packed color per site
 
+	// MINECRAFT TERRAIN STYLE:
+
+	// InvMaxDist
+	float InvMaxDist = 0.0f;
+	TArray<float> ErosionControlPerSite;  // Minecraft erosion axis per site, [-1, 1]
+
 	void GeneratePlates_RedBlobRandomFill();
 	void GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors, TArray<int32>& OutHalfEdgeIndices) const;
 	// add fisher-yates shuffle to randomize the order of neighbors and avoid similar plate IDs
@@ -568,6 +575,10 @@ protected:
 
 	void AssignElevations();
 
+	// MINECRAFT TERRAIN STYLE FUNCTIONS
+	void BuildErosionControlPerSite();
+
+	// COLOR DEBUGGING
 	uint32 BuildPackedColor(const int32 PlateIndex) const;
 	void BuildPlateDebugColors();
 

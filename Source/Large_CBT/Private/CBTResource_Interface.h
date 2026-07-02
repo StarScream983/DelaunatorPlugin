@@ -30,6 +30,7 @@ private:
 	TArray<uint32> CPU_Voronoi_Cells_Color_Buffer;
 	TArray<float> CPU_ElevationPerSite_Buffer;
 	TArray<float> CPU_DistanceToBoundaryNormPerSite_Buffer;
+	TArray<float> CPU_ErosionControlPerSite_Buffer;
 
 	// CPU CBT BUFFERS
 	int32 D{ 0 };
@@ -63,6 +64,9 @@ private:
 	FBufferRHIRef DistanceToBoundaryNormPerSiteBuffer_RHI;
 	FShaderResourceViewRHIRef DistanceToBoundaryNormPerSiteBuffer_SRV;
 
+	FBufferRHIRef ErosionControlPerSiteBuffer_RHI;
+	FShaderResourceViewRHIRef ErosionControlPerSiteBuffer_SRV;
+
 	// GPU CBT buffers
 	FRWBufferStructured HalfEdges_Buffer;     // StructuredBuffer<FHalfEdge_CBT>
 	FRWBufferStructured Vertex_Buffer;
@@ -84,6 +88,7 @@ public:
 	FORCEINLINE FShaderResourceViewRHIRef GetVoronoiCellColorsSRV() const { return VoronoiCellColors_SRV; }
 	FORCEINLINE FShaderResourceViewRHIRef GetElevationPerSiteSRV() const { return ElevationPerSiteBuffer_SRV; }
 	FORCEINLINE FShaderResourceViewRHIRef GetDistanceToBoundaryNormPerSiteSRV() const { return DistanceToBoundaryNormPerSiteBuffer_SRV; }
+	FORCEINLINE FShaderResourceViewRHIRef GetErosionControlPerSiteSRV() const { return ErosionControlPerSiteBuffer_SRV; }
 
 	/** Returns true if the two required GPU buffers have been initialized. */
 	FORCEINLINE bool IsGPUReady() const { return FibonacciPoints_Buffer.SRV.IsValid() && SphericalTriangles_Buffer.SRV.IsValid(); }
@@ -111,6 +116,7 @@ public:
 
 	void PrimeElevationPerSiteBuffer(const TArray<float>& InElevationPerSite);
 	void PrimeDistanceToBoundaryNormPerSiteBuffer(const TArray<float>& InDistanceNormPerSite);
+	void PrimeErosionControlPerSiteBuffer(const TArray<float>& InErosionControlPerSite);
 
 private:
 
@@ -134,4 +140,5 @@ private:
 	void UploadPointerBufferToGPU();
 	void UploadElevationPerSiteBufferToGPU();
 	void UploadDistanceToBoundaryNormPerSiteBufferToGPU();
+	void UploadErosionControlPerSiteBufferToGPU();
 };

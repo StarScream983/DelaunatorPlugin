@@ -47,6 +47,12 @@ void FCBTResource_Interface::PrimeDistanceToBoundaryNormPerSiteBuffer(const TArr
 	CPU_DistanceToBoundaryNormPerSite_Buffer = InDistanceNormPerSite;
 }
 
+void FCBTResource_Interface::PrimeErosionControlPerSiteBuffer(const TArray<float>& InErosionControlPerSite)
+{
+	CPU_ErosionControlPerSite_Buffer.Empty();
+	CPU_ErosionControlPerSite_Buffer = InErosionControlPerSite;
+}
+
 void FCBTResource_Interface::InitFromCPU(const int32 InD, const TArray<FHalfEdge_CBT>& InHalfEdges, const TArray<FVector3_HighLow>& InVertexBuffer, const TArray<FRootBisector_CBT>& InRootBisectors, const TArray<int32>& InCBTBuffer)
 {
 
@@ -222,6 +228,25 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
 		UploadDistanceToBoundaryNormPerSiteBufferToGPU();
 	}
 
+	if (CPU_ErosionControlPerSite_Buffer.Num() > 0)
+	{
+		const uint32 NumBytes = CPU_ErosionControlPerSite_Buffer.Num() * sizeof(float);
+		FRHIResourceCreateInfo CreateInfo(TEXT("LargeCBT_ErosionControlPerSiteBuffer"));
+
+		ErosionControlPerSiteBuffer_RHI = RHICmdList.CreateVertexBuffer(
+			NumBytes,
+			BUF_ShaderResource | BUF_Static,
+			ERHIAccess::SRVMask,
+			CreateInfo);
+
+		ErosionControlPerSiteBuffer_SRV = RHICmdList.CreateShaderResourceView(
+			ErosionControlPerSiteBuffer_RHI,
+			sizeof(float),
+			PF_R32_FLOAT);
+
+		UploadErosionControlPerSiteBufferToGPU();
+	}
+
 	if (CPU_Voronoi_Cells_Color_Buffer.Num() > 0)
 	{
 		const uint32 NumBytes = CPU_Voronoi_Cells_Color_Buffer.Num() * sizeof(uint32);
@@ -376,6 +401,9 @@ void FCBTResource_Interface::ReleaseRHI()
 
 	DistanceToBoundaryNormPerSiteBuffer_SRV.SafeRelease();
 	DistanceToBoundaryNormPerSiteBuffer_RHI.SafeRelease();
+
+	ErosionControlPerSiteBuffer_SRV.SafeRelease();
+	ErosionControlPerSiteBuffer_RHI.SafeRelease();
 
 	HalfEdges_Buffer.Release();
 	Vertex_Buffer.Release();
@@ -693,4 +721,23 @@ void FCBTResource_Interface::UploadDistanceToBoundaryNormPerSiteBufferToGPU()
 
 	FMemory::Memcpy(Dest, CPU_DistanceToBoundaryNormPerSite_Buffer.GetData(), NumBytes);
 	RHIUnlockBuffer(DistanceToBoundaryNormPerSiteBuffer_RHI);
+}
+
+void FCBTResource_Interface::UploadErosionControlPerSiteBufferToGPU()
+{
+	if (!ErosionControlPerSiteBuffer_RHI.IsValid() || CPU_ErosionControlPerSite_Buffer.Num() == 0)
+	{
+		return;
+	}
+
+	const uint32 NumBytes = CPU_ErosionControlPerSite_Buffer.Num() * sizeof(float);
+
+	void* Dest = RHILockBuffer(
+		ErosionControlPerSiteBuffer_RHI,
+		0,
+		NumBytes,
+		RLM_WriteOnly);
+
+	FMemory::Memcpy(Dest, CPU_ErosionControlPerSite_Buffer.GetData(), NumBytes);
+	RHIUnlockBuffer(ErosionControlPerSiteBuffer_RHI);
 }

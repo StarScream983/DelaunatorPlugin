@@ -581,3 +581,158 @@ float L = static_cast<float>(D - static_cast<double>(H));
 If `Low` is always `0`, the shader df64 path does nothing useful — audit `VoronoiGeoCenters` / `CBT_FibonacciPoints` upload sites (`DelaunatorPlugin`, `Large_CBT`, etc.).
 
 ---
+
+## Minecraft-style erosion control
+
+#### What Minecraft “erosion” actually does
+
+In Minecraft 1.18+, **erosion** is a **low-frequency noise axis**, not physical carving. It picks **flat vs rugged** regions before local detail is applied. It does **not** need elevation, Sethex moisture, or rivers.
+
+In this project, `erosionControl[r]` does the same job: it controls **how much high-frequency height** to add **on top of** tectonic `AssignElevations()`. We blend **distance-to-boundary** (interior = flatter) with **slow fbm** (Minecraft-like variety). Pure Minecraft = noise only; set the `t` weight to 0.
+
+Requires `FillDistanceToBoundaryBFS()` after plates (no elevation).
+
+#### Build `erosionControl` base code
+changes have been made to remove the first loop
+
+```cpp
+void UGeoDelaunatorComponent::BuildErosionControlPerSite()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	ErosionControlPerSite.SetNumUninitialized(NumSites);
+
+	int32 MaxDist = 1;
+	for (int32 Si = 0; Si < NumSites; ++Si)
+	{
+		const int32 d = DistanceToBoundary[Si];
+		if (d != INT32_MAX && d > MaxDist) { MaxDist = d; }
+	}
+	const float InvMaxDist = 1.0f / static_cast<float>(MaxDist);
+
+	for (int32 R = 0; R < NumSites; ++R)
+	{
+		const int32 d = DistanceToBoundary[R];
+		const float t = (d == INT32_MAX) ? 0.0f : static_cast<float>(d) * InvMaxDist;
+
+		const FVector& P = FibonacciPoints[R];
+		const double n = RedBlobFbmNoiseOctaves(P.X * 0.004, P.Y * 0.004, P.Z * 0.004);
+
+		float E = static_cast<float>(0.65 * t + 0.35 * n);
+		ErosionControlPerSite[R] = FMath::Clamp(E, -1.0f, 1.0f);
+	}
+}
+```
+
+#### Spline
+
+`erosionControl[r]` is clamped to **`[-1, 1]`** (spline **input**). Spline **output** is e.g. **detail amplitude** in `ElevationPerSite` units — not forced to `[-1, 1]`.
+
+Example knots: rugged at −1, flat at +1.
+
+| `erosionControl` (x) | spline output `amp` |
+|----------------------|---------------------|
+| −1.0 | 0.12 |
+|  0.0 | 0.06 |
+| +1.0 | 0.02 |
+
+Per site: `erosionControl` → `SplineEval` → `amp` → `amp * highFreqNoise` → add to tectonic height.
+
+```cpp
+static float EvalSpline1D(float X, const TArray<float>& Xs, const TArray<float>& Ys)
+{
+	X = FMath::Clamp(X, Xs[0], Xs[Xs.Num() - 1]);
+	for (int32 i = 0; i < Xs.Num() - 1; ++i)
+	{
+		if (X <= Xs[i + 1])
+		{
+			const float u = (X - Xs[i]) / (Xs[i + 1] - Xs[i]);
+			return FMath::Lerp(Ys[i], Ys[i + 1], u);
+		}
+	}
+	return Ys.Last();
+}
+
+void UGeoDelaunatorComponent::ApplyMinecraftDetailToElevation()
+{
+	static const TArray<float> SplineX = { -1.0f, 0.0f, 1.0f };
+	static const TArray<float> SplineY = {  0.12f, 0.06f, 0.02f };
+
+	for (int32 R = 0; R < ElevationPerSite.Num(); ++R)
+	{
+		const float Amp = EvalSpline1D(ErosionControlPerSite[R], SplineX, SplineY);
+
+		const FVector& P = FibonacciPoints[R];
+		const double Detail = RedBlobFbmNoiseOctaves(P.X * 0.02, P.Y * 0.02, P.Z * 0.02);
+
+		ElevationPerSite[R] += static_cast<float>(Amp * Detail);
+	}
+}
+```
+
+Call order: `FillDistanceToBoundaryBFS` → `BuildErosionControlPerSite` → `AssignElevations` → `ApplyMinecraftDetailToElevation` → Sethex → rivers.
+
+#### implementation
+
+`GeoDelaunatorComponent.h` (540–544)
+
+```cpp
+	// MINECRAFT TERRAIN STYLE:
+
+	// InvMaxDist
+	float InvMaxDist = 0.0f;
+	TArray<float> ErosionControlPerSite;  // Minecraft erosion axis per site, [-1, 1]
+```
+
+`GeoDelaunatorComponent.h` (577–578)
+
+```cpp
+	// MINECRAFT TERRAIN STYLE FUNCTIONS
+	void BuildErosionControlPerSite();
+```
+
+`GeoDelaunatorComponent.cpp` — `AssignElevations()` (2214–2215)
+
+```cpp
+	// MAXDIST to calculate minecraft erosion control
+	float MaxDist = 1.f;
+```
+
+`GeoDelaunatorComponent.cpp` — `AssignElevations()` (2264–2268)
+
+```cpp
+				DistanceToBoundary[NeighborSite] = NewDist;
+				NearestBoundaryElevation[NeighborSite] = NearestElev;
+
+				// for minecraft erosion control
+				MaxDist = FMath::Max(MaxDist, static_cast<float>(NewDist));
+```
+
+`GeoDelaunatorComponent.cpp` — `AssignElevations()` (2283–2284)
+
+```cpp
+	// invMaxDist for minecraft erosion control
+	InvMaxDist = 1.0f / MaxDist;
+```
+
+`GeoDelaunatorComponent.cpp` — `BuildErosionControlPerSite()` (2288–2303)
+
+```cpp
+void UGeoDelaunatorComponent::BuildErosionControlPerSite()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	ErosionControlPerSite.SetNumUninitialized(NumSites);
+	for (int32 R = 0; R < NumSites; ++R)
+	{
+		const int32 d = DistanceToBoundary[R];
+		const float t = (d == INT32_MAX) ? 0.0f : static_cast<float>(d) * InvMaxDist;
+
+		const FVector& P = FibonacciPoints[R];
+		const double n = RedBlobFbmNoiseOctaves(P.X * 0.004, P.Y * 0.004, P.Z * 0.004);
+
+		float E = static_cast<float>(0.65 * t + 0.35 * n);
+		ErosionControlPerSite[R] = FMath::Clamp(E, -1.0f, 1.0f);
+	}
+}
+```
+
+---

@@ -151,6 +151,7 @@ StructuredBuffer<int> VoronoiGeoMeshFlat;
 Buffer<uint> VoronoiCellColors;
 Buffer<float> ElevationPerSite;     // PF_R32_FLOAT, indexed by SiteId / Voronoi cell index
 Buffer<float> DistanceToBoundaryNormPerSite; // 0..1 normalized hop distance from plate boundary (AssignElevations BFS)
+Buffer<float> ErosionControlPerSite; // Minecraft erosion axis per site, [-1 rugged, +1 flat]
 
 /** Reconstruct double-precision position from HighLow pair (as float math on GPU). */
 float3 ReconstructPosition(FVector3_HighLow v)
@@ -279,7 +280,7 @@ float4 GeoVoronoiRedBlob1843Colormap(float Elev, float Moisture)
 }
 
 /** Mode matches `EGeoVoronoiPlanetColorDebug` on CPU. */
-float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint PackedCellColor, float DistNorm)
+float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint PackedCellColor, float DistNorm, float ErosionControl)
 {
     if (Mode == 0u)
     {
@@ -311,6 +312,15 @@ float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint P
         float3 cNear = float3(0.15f, 0.55f, 0.95f);
         float3 cFar = float3(0.95f, 0.25f, 0.12f);
         float3 rgb = lerp(cNear, cFar, t);
+        return float4(rgb, 1.0f);
+    }
+    if (Mode == 5u)
+    {
+        // -1 = rugged (red), +1 = flat (blue)
+        float t = saturate(ErosionControl * 0.5f + 0.5f);
+        float3 cRugged = float3(0.95f, 0.25f, 0.12f);
+        float3 cFlat = float3(0.15f, 0.55f, 0.95f);
+        float3 rgb = lerp(cRugged, cFlat, t);
         return float4(rgb, 1.0f);
     }
     return HashUIntToColor(SiteId);

@@ -65,6 +65,7 @@ public:
 		VoronoiCellColorsParameter.Bind(ParameterMap, TEXT("VoronoiCellColors"));
 		ElevationPerSiteParameter.Bind(ParameterMap, TEXT("ElevationPerSite"));
 		DistanceToBoundaryNormPerSiteParameter.Bind(ParameterMap, TEXT("DistanceToBoundaryNormPerSite"));
+		ErosionControlPerSiteParameter.Bind(ParameterMap, TEXT("ErosionControlPerSite"));
 		ColorDebugModeParameter.Bind(ParameterMap, TEXT("ColorDebugMode"));
 	}
 
@@ -118,6 +119,10 @@ public:
 		{
 			ShaderBindings.Add(DistanceToBoundaryNormPerSiteParameter, UserData->DistanceToBoundaryNormPerSiteSRV);
 		}
+		if (ErosionControlPerSiteParameter.IsBound() && UserData->ErosionControlPerSiteSRV)
+		{
+			ShaderBindings.Add(ErosionControlPerSiteParameter, UserData->ErosionControlPerSiteSRV);
+		}
 		if (ColorDebugModeParameter.IsBound())
 		{
 			ShaderBindings.Add(ColorDebugModeParameter, UserData->ColorDebugMode);
@@ -135,6 +140,7 @@ protected:
 	LAYOUT_FIELD(FShaderResourceParameter, VoronoiCellColorsParameter);
 	LAYOUT_FIELD(FShaderResourceParameter, ElevationPerSiteParameter);
 	LAYOUT_FIELD(FShaderResourceParameter, DistanceToBoundaryNormPerSiteParameter);
+	LAYOUT_FIELD(FShaderResourceParameter, ErosionControlPerSiteParameter);
 	LAYOUT_FIELD(FShaderParameter, ColorDebugModeParameter);
 };
 

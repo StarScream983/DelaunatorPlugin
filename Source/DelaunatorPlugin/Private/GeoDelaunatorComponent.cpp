@@ -83,7 +83,7 @@ FPrimitiveSceneProxy* UGeoDelaunatorComponent::CreateSceneProxy()
 
 uint32 UGeoDelaunatorComponent::GetPlanetColorDebugShaderValue_RenderThread() const
 {
-	return static_cast<uint32>(PlanetColorDebugShaderValue);
+	return PlanetColorDebugShaderValue.Load();
 }
 
 void UGeoDelaunatorComponent::SetMaterial(int32 InElementIndex, UMaterialInterface* InMaterial)
@@ -264,8 +264,8 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		ImGui::Text("Half_Edge Buffer: %d", HalfEdge_Buffer.Num());
 		ImGui::Text("Root Bisectors Buffer: %d", HalfEdge_Buffer.Num());
 		ImGui::Text("CBT Buffer: %d", CBT_Buffer.Num());
-		ImGui::Text("Voronoi Sites: %d", VoronoiGeoCenters.Num());
-		ImGui::Text("Triangles: %d", SphericalTriangles.Num());
+		// ImGui::Text("Voronoi GeoCenters: %d", VoronoiGeoCenters.Num()); // same as Delaunay Triangles
+		ImGui::Text("Delaunay Triangles: %d", SphericalTriangles.Num());
 
 		static const char* PlanetColorDebugLabels[] =
 		{
@@ -274,11 +274,12 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 			"SiteId hash",
 			"1843 colormap (Red Blob)",
 			"Distance to boundary (BFS)",
+			"Erosion control (Minecraft)",
 		};
 		int32 ColorDbgIdx = static_cast<int32>(PlanetColorDebug);
 		if (ImGui::Combo("Planet color debug", &ColorDbgIdx, PlanetColorDebugLabels, UE_ARRAY_COUNT(PlanetColorDebugLabels)))
 		{
-			PlanetColorDebug = static_cast<EGeoVoronoiPlanetColorDebug>(FMath::Clamp(ColorDbgIdx, 0, 4));
+			PlanetColorDebug = static_cast<EGeoVoronoiPlanetColorDebug>(FMath::Clamp(ColorDbgIdx, 0, 5));
 		}
 	}
 	ImGui::End();
@@ -1150,8 +1151,11 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	GeneratePlates_RedBlobRandomFill();
 	//AssignElevations_RedBlob1843();
 	AssignElevations();
+	BuildErosionControlPerSite();
 
-	// CAN THIS BE INTEGRATED INTO THE ASSIGN ELEVATIONS FUNCTION, DURING THE BFS FOR BOUNDARY DEFINITION
+	/**IT CAN BE ADDED TO THE SECOND PASS OF THE BFS, FROM BOUDARY TO PLATE CENTER,
+	*  WHERE THE DISTANCE TO BOUNDARY IS CALCULATED SIMULTANEOUSLY AS THE ELEVATION ASSIGNMENT, 
+	*  THIS WAY WE AVOID AN EXTRA PASS JUST FOR THE DISTANCE CALCULATION */
 	const int32 NumSitesForDebug = PlateIdPerSite.Num();
 	TArray<float> DistanceToBoundaryNorm;
 	DistanceToBoundaryNorm.SetNumUninitialized(NumSitesForDebug);
@@ -1177,6 +1181,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	CBTResources->PrimeTrianglesBuffers(FibonacciPoints_HL, SphericalTrisFlat, SphericalHalfEdges);
 	CBTResources->PrimeElevationPerSiteBuffer(ElevationPerSite);
 	CBTResources->PrimeDistanceToBoundaryNormPerSiteBuffer(DistanceToBoundaryNorm);
+	CBTResources->PrimeErosionControlPerSiteBuffer(ErosionControlPerSite);
 	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters_HL, RootBisectors_Buffer, CBT_Buffer);
 
 	// CBTResources is now valid — recreate the scene proxy so it captures the new pointer.
@@ -1210,10 +1215,14 @@ void UGeoDelaunatorComponent::Geo_Circumcenters(TArray<FVector>& Circumcenters, 
 			+ FVector::CrossProduct(C, B)
 			+ FVector::CrossProduct(A, C);
 
-		/** THIS FIXES THE CASE OF DEGENERATE TRIANGLES LINKING TO THE CENTER OF THE PLANET(0, 0, 0) 
-		* WHICH CAUSES NAN CIRCUMCENTERS AND BREAKS EVERYTHING IN THE VORONOI BUILDING
-		* VERY IMPORTANT FIX, DON'T SKIP OR TRY TO "CLEAN" THESE TRIANGLES, JUST FIX THE CIRCUMCENTER CALCULATION TO AVOID NANs
-		*/
+		/****************************************************************************
+		 * IMPORTANT FIX FOR NAN CIRCUMCENTERS
+		 * In the case of degenerate triangles linking to the center of the planet (0,0,0), the cross product sum can be zero, leading to NaN circumcenters after normalization. 
+		 * This breaks everything in the Voronoi building since circumcenters are used as Voronoi vertices. 
+		 * The fix is to check if the cross product sum is nearly zero, and if so, use the normalized average of the triangle vertices as a fallback circumcenter. 
+		 * This ensures we get a valid point on the sphere even for degenerate triangles, and avoids NaNs that would break the Voronoi construction.
+		 * VERY IMPORTANT FIX, DON'T SKIP OR TRY TO "CLEAN" THESE TRIANGLES, JUST FIX THE CIRCUMCENTER CALCULATION TO AVOID NANs
+		 ****************************************************************************/
 		FVector Normalized = V.GetSafeNormal(); // This is the circumcenter on the unit sphere
 		if (Normalized.IsNearlyZero())
 		{
@@ -1523,8 +1532,8 @@ TArray<int32> UGeoDelaunatorComponent::PickRandomPlateSeeds(int32 Count, TArray<
 		FPlateData newPlate(SeedSite);
 		newPlate.bIsOceanic = (RngStream.FRand() < OceanicRatio);
 		newPlate.DesiredElevation = newPlate.bIsOceanic
-			? -0.8 + RngStream.FRand() * 0.5   // [-0.8, -0.3]
-			: 0.1 + RngStream.FRand() * 0.5;  // [ 0.1,  0.6]
+			? -0.8 + RngStream.FRand() * 0.4   // [-0.8, -0.3] // originally -0.8 + RngStream.FRand() * 0.5
+			: 0.1 + RngStream.FRand() * 0.2;  // [ 0.1,  0.6] // originally 0.1 + RngStream.FRand() * 0.5
 
 		/** Compute a random tangent vector at this seed's surface point,
 		* Gram-Schmidt projection. DotProduct(RandomVec, SeedNormal) measures how much of RandomVec 
@@ -1562,6 +1571,7 @@ TArray<int32> UGeoDelaunatorComponent::GetAncestorChain(int32 StartSite) const
 	return Chain;  // [StartSite → ... → PlateSeed]
 }
 
+#pragma region Plate boundary elevation - ComputeBoundaryElevation (legacy step)
 // Given one boundary edge and the two plates on either side,
 // returns the elevation spike or trough at that boundary in [-1.0, +1.0].
 double  UGeoDelaunatorComponent::ComputeBoundaryElevation(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB)
@@ -1605,7 +1615,9 @@ double  UGeoDelaunatorComponent::ComputeBoundaryElevation(const FPlateBoundary& 
 	// 0.2 multiplier keeps rifts shallow — dips below plate floor but not drastically
 	return MinDesired + Pressure * 0.2;           // Pressure < 0 → dips lower
 }
+#pragma endregion
 
+#pragma region Plate boundary elevation - ComputeBoundaryElevation_Gainey
 // Given one boundary edge and the two plates on either side,
 // returns the elevation spike or trough at that boundary in [-1.0, +1.0].
 // Smooth variant: removes the hard step at Pressure = 0 by blending the base
@@ -1660,7 +1672,9 @@ double UGeoDelaunatorComponent::ComputeBoundaryElevation_Gainey(
     //  Pressure = 0 → returns the mean of the two plate floors (transform / neutral)
     return Base + Coeff * Pressure;
 }
+#pragma endregion
 
+#pragma region Plate boundary elevation - ComputeBoundaryElevation_Hybrid
 // Hybrid: Gainey's regime classification + convergence/shear/dormant branches,
 // with the divergence branch anchored on MinElev so divergent boundaries depress
 // below the lower plate floor (rift valleys, oceanic trenches).
@@ -1707,6 +1721,9 @@ double UGeoDelaunatorComponent::ComputeBoundaryElevation_Hybrid(
     // Dormant — Gainey: mean of the two plate floors.
     return (ElevA + ElevB) * 0.5;
 }
+#pragma endregion
+
+#pragma region Plate boundary elevation - ComputeBoundaryElevation_Hybrid2
 // Continuous version: no discrete regime branches. Same four "modes" as the hybrid,
 // blended with smooth weights from pressure/shear so crossing a threshold is not a step.
 double UGeoDelaunatorComponent::ComputeBoundaryElevation_Hybrid2(
@@ -1753,7 +1770,9 @@ double UGeoDelaunatorComponent::ComputeBoundaryElevation_Hybrid2(
 	const double W0 = 1.0 - Wc - Wd - Ws; // dormant / "quiet" contribution
 	return W0 * EDorm + Wc * EConv + Wd * EDiv + Ws * EShear;
 }
+#pragma endregion
 
+#pragma region Red Blob 1843 elevation (file-local noise + distance fields + site heightfield)
 namespace
 {
 /** fBm matching planet-generation.js weights; uses smooth Perlin (Red Blob uses Simplex — same role). */
@@ -1987,6 +2006,61 @@ void UGeoDelaunatorComponent::AssignElevationFromRedBlob1843(TArray<float>& OutE
 	}
 }
 
+void UGeoDelaunatorComponent::FillDistanceToBoundaryBFS()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	DistanceToBoundary.Init(INT32_MAX, NumSites);
+	TQueue<int32> Queue;
+
+	auto TryEnqueueBoundarySite = [&](int32 Site)
+		{
+			if (!DistanceToBoundary.IsValidIndex(Site))
+			{
+				return;
+			}
+			if (DistanceToBoundary[Site] == INT32_MAX)
+			{
+				DistanceToBoundary[Site] = 0;
+				Queue.Enqueue(Site);
+			}
+		};
+
+	for (const FPlateBoundary& Boundary : PlateBoundaries)
+	{
+		TryEnqueueBoundarySite(Boundary.SiteA);
+		TryEnqueueBoundarySite(Boundary.SiteB);
+	}
+
+	TArray<int32> Neighbors;
+	TArray<int32> HalfEdgeIndicesUnused;
+	int32 CurrentSite = 0;
+	while (Queue.Dequeue(CurrentSite))
+	{
+		const int32 CurDist = DistanceToBoundary[CurrentSite];
+		GetVoronoiNeighbors(CurrentSite, Neighbors, HalfEdgeIndicesUnused);
+		for (const int32 Neighbor : Neighbors)
+		{
+			if (DistanceToBoundary[Neighbor] == INT32_MAX)
+			{
+				DistanceToBoundary[Neighbor] = CurDist + 1;
+				Queue.Enqueue(Neighbor);
+			}
+		}
+	}
+}
+
+void UGeoDelaunatorComponent::AssignElevations_RedBlob1843()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	ElevationPerSite.Init(0.0f, NumSites);
+
+	//BlurBoundaryStress(/*Iterations=*/3, /*CenterWeight=*/0.4);
+	AssignElevationFromRedBlob1843(ElevationPerSite);
+	FillDistanceToBoundaryBFS();
+}
+#pragma endregion
+
+#pragma region Plate elevation after boundary kernels (blur stress, distance BFS, assign entry points)
 // ── Boundary stress smoothing ───────────────────────────────────────────────────
 // Faithful port of Gainey's blurPlateBoundaryStress(boundaryCorners, 3, 0.4).
 //
@@ -2075,59 +2149,7 @@ void UGeoDelaunatorComponent::BlurBoundaryStress(int32 Iterations, double Center
 	}
 }
 
-void UGeoDelaunatorComponent::FillDistanceToBoundaryBFS()
-{
-	const int32 NumSites = PlateIdPerSite.Num();
-	DistanceToBoundary.Init(INT32_MAX, NumSites);
-	TQueue<int32> Queue;
-
-	auto TryEnqueueBoundarySite = [&](int32 Site)
-	{
-		if (!DistanceToBoundary.IsValidIndex(Site))
-		{
-			return;
-		}
-		if (DistanceToBoundary[Site] == INT32_MAX)
-		{
-			DistanceToBoundary[Site] = 0;
-			Queue.Enqueue(Site);
-		}
-	};
-
-	for (const FPlateBoundary& Boundary : PlateBoundaries)
-	{
-		TryEnqueueBoundarySite(Boundary.SiteA);
-		TryEnqueueBoundarySite(Boundary.SiteB);
-	}
-
-	TArray<int32> Neighbors;
-	TArray<int32> HalfEdgeIndicesUnused;
-	int32 CurrentSite = 0;
-	while (Queue.Dequeue(CurrentSite))
-	{
-		const int32 CurDist = DistanceToBoundary[CurrentSite];
-		GetVoronoiNeighbors(CurrentSite, Neighbors, HalfEdgeIndicesUnused);
-		for (const int32 Neighbor : Neighbors)
-		{
-			if (DistanceToBoundary[Neighbor] == INT32_MAX)
-			{
-				DistanceToBoundary[Neighbor] = CurDist + 1;
-				Queue.Enqueue(Neighbor);
-			}
-		}
-	}
-}
-
-void UGeoDelaunatorComponent::AssignElevations_RedBlob1843()
-{
-	const int32 NumSites = PlateIdPerSite.Num();
-	ElevationPerSite.Init(0.0f, NumSites);
-
-	BlurBoundaryStress(/*Iterations=*/3, /*CenterWeight=*/0.4);
-	AssignElevationFromRedBlob1843(ElevationPerSite);
-	FillDistanceToBoundaryBFS();
-}
-
+// 2ND PASS, BOUNDARY-TO-INTERIOR PROPAGATION BFS, ASSIGN ELEVATION, DISTANCE TO BOUNDARY, GEOLOGICAL PROVINCES
 void UGeoDelaunatorComponent::AssignElevations()
 {
 	// One elevation slot per Voronoi cell — same count as Fibonacci points
@@ -2170,7 +2192,7 @@ void UGeoDelaunatorComponent::AssignElevations()
 		const FPlateData& PlateB = Plates[Boundary.PlateB];
 
 		// Peak or trough for this boundary — the value the BFS will decay from
-		const double BoundaryElev = ComputeBoundaryElevation_Hybrid2(Boundary, PlateA, PlateB);
+		const double BoundaryElev = ComputeBoundaryElevation(Boundary, PlateA, PlateB);
 
 		// Each boundary edge contributes to both of its endpoint sites
 		BoundarySum  [Boundary.SiteA] += BoundaryElev;
@@ -2191,6 +2213,9 @@ void UGeoDelaunatorComponent::AssignElevations()
 			Queue.Enqueue(Site);
 		}
 	}
+
+	// MAXDIST to calculate minecraft erosion control
+	float MaxDist = 1.f;
 
 	/** ── Propagation Phase ────────────────────────────────────────────────────
 	* Controls how fast boundary elevation fades toward the plate resting floor
@@ -2223,10 +2248,27 @@ void UGeoDelaunatorComponent::AssignElevations()
 				double NearestElev = NearestBoundaryElevation[CurrentSite];
 				// Exponential decay: 1.0 at the boundary → approaching 0.0 deep inland
 				// Steep near the boundary, flattening out quickly — natural bell shape — natural mountain profile
-				double DistanceFactor = Sleef_exp_u10(-NewDist * DecayRate);
+				// double DistanceFactor = Sleef_exp_u10(-NewDist * DecayRate);
+
+				// GAUSSIAN — narrow mountain ridge, steeper than exponential
+				double DistanceFactor = Sleef_exp_u10(-(double)(NewDist * NewDist) * DecayRate);
+				// DecayRate 0.08 = wide range, 0.25 = narrow alpine ridge
+
+				// POWER CURVE — designer-tunable sharpness
+				//const int32 MaxDist = 2; // hops before elevation hits floor
+				//double t = FMath::Clamp((double)NewDist / MaxDist, 0.0, 1.0);
+				//double DistanceFactor = FMath::Max(0.0, 1.0 - FMath::Pow(t, 2.5));
+				// exponent 1.0 = linear, 2.0 = quadratic, 3.0+ = sharp peak
+
+				// INVERSE SQUARE — fast near boundary, very long tail
+				//const double k = 0.3;
+				//double DistanceFactor = 1.0 / (1.0 + (double)(NewDist * NewDist) * k);
 
 				DistanceToBoundary[NeighborSite] = NewDist;
 				NearestBoundaryElevation[NeighborSite] = NearestElev;
+
+				// for minecraft erosion control
+				MaxDist = FMath::Max(MaxDist, static_cast<float>(NewDist));
 
 				// Lerp: DistanceFactor = 1.0 (at boundary)  → pure NearestElev (spike or trench)
 				// DistanceFactor = 0.0 (deep interior) → pure DesiredElev (plate resting floor)
@@ -2240,7 +2282,29 @@ void UGeoDelaunatorComponent::AssignElevations()
 			}
 		}
 	}
+
+	// invMaxDist for minecraft erosion control
+	InvMaxDist = 1.0f / MaxDist;
 }
+
+// i need to find where to incorporate
+void UGeoDelaunatorComponent::BuildErosionControlPerSite()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+	ErosionControlPerSite.SetNumUninitialized(NumSites);
+	for (int32 R = 0; R < NumSites; ++R)
+	{
+		const int32 d = DistanceToBoundary[R];
+		const float t = (d == INT32_MAX) ? 0.0f : static_cast<float>(d) * InvMaxDist;
+
+		const FVector& P = FibonacciPoints[R];
+		const double n = RedBlobFbmNoiseOctaves(P.X * 0.01, P.Y * 0.01, P.Z * 0.01); //0.004
+
+		float E = static_cast<float>(0.65 * t + 0.35 * n);
+		ErosionControlPerSite[R] = FMath::Clamp(2.0f * E - 1.0f, -1.0f, 1.0f);
+	}
+}
+#pragma endregion
 
 
 uint32 UGeoDelaunatorComponent::BuildPackedColor(const int32 PlateIndex) const

@@ -40,6 +40,7 @@ struct FGeoVoronoiIndirectInstancingUserData : public FOneFrameResource
 	FRHIShaderResourceView* VoronoiCellColorsSRV = nullptr;
 	FRHIShaderResourceView* ElevationPerSiteSRV = nullptr;
 	FRHIShaderResourceView* DistanceToBoundaryNormPerSiteSRV = nullptr;
+	FRHIShaderResourceView* ErosionControlPerSiteSRV = nullptr;
 
 	uint32 ColorDebugMode = 0;
 };
