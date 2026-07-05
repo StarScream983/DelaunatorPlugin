@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Queue.h"
 #include "Components/PrimitiveComponent.h"
 //COLLISION
 #include "Interfaces/Interface_CollisionDataProvider.h"
@@ -285,6 +286,50 @@ struct FPlateBoundary
     double Shear     = 0.0;  // |dot(RelativeMotion, BoundaryTangent)|, >=0
 	double Elevation = 0.0;  // computed boundary elevation
 };
+USTRUCT()
+struct FLandOceanBoundary
+{
+	GENERATED_BODY()
+
+	int32 LandSite = INDEX_NONE;
+	int32 OceanSite = INDEX_NONE;
+
+	int32 LandPlate = INDEX_NONE;
+	int32 OceanPlate = INDEX_NONE;
+
+	// Global flat indices into FHalfEdge_CBT array.
+	int32 HalfEdgeLandToOcean = INDEX_NONE;
+	int32 HalfEdgeOceanToLand = INDEX_NONE;
+
+	float LandElevation = 0.0f;
+	float OceanElevation = 0.0f;
+};
+
+// Boundary influence propagated inward during AssignElevations().
+// Local province classification uses this to distinguish fold belts, rifts, volcanic highs, etc.
+enum class EGeoBoundaryInfluenceType : uint8
+{
+	None = 0,
+	Convergent = 1,
+	Divergent = 2,
+	Transform = 3,
+	Subduction = 4,
+	ObliqueConvergent = 5,
+};
+
+// Local geomorphology province assigned per site after elevation/coastline fields exist.
+// These are the 8 outputs used by ClassifyProvince().
+enum class EGeoProvince : uint8
+{
+	AbyssalPlain = 0,
+	VolcanicHighland = 1,
+	IslandArc = 2,
+	RiftZone = 3,
+	FoldBelt = 4,
+	Craton = 5,
+	CoastalPlain = 6,
+	Shield = 7,
+};
 
 /** VertexColor / debug visualization for the Voronoi planet vertex factory (`ColorDebugMode` in HLSL). */
 UENUM(BlueprintType)
@@ -536,6 +581,9 @@ protected:
 	TArray<float> ElevationPerSite;        // [-1 = deep ocean, +1 = high mountain]
 	// How many hops each site is from its nearest boundary, INT32_MAX = not yet visited (used as the "unvisited" sentinel)
 	TArray<int32> DistanceToBoundary;      // useful later for moisture + rivers
+	// Boundary type carried inward from the source plate boundary during AssignElevations().
+	// Used by local province rules (subduction -> volcanic highland/island arc, divergent -> rift, etc.).
+	TArray<EGeoBoundaryInfluenceType> ProximityBoundaryTypePerSite;
 	TArray<uint32> PlateDebugColors;  // optional packed color per site
 
 	// MINECRAFT TERRAIN STYLE:
@@ -543,6 +591,14 @@ protected:
 	// InvMaxDist
 	float InvMaxDist = 0.0f;
 	TArray<float> ErosionControlPerSite;  // Minecraft erosion axis per site, [-1, 1]
+	TArray<float> PeaksValleysPerSite;      // [-1 = valley / basin, +1 = peak / ridge]
+
+	// TERRAIN SURFACE FIELDS: for local province classification and biome selection	
+	TArray<FLandOceanBoundary> LandOceanBoundaries;
+	TArray<EGeoProvince> LocalProvincePerSite; // Local province classification used by soil, biome, and material rules.
+	TArray<uint8> SoilTypePerSite;          // Compact soil/material class id for biome/material selection.
+	TArray<float> SoilDepthPerSite;         // 0 = exposed bedrock / thin soil, 1 = deep soil / sediment.
+	TQueue<int32> LandOceanBoundaryQueue;   // Unique land-side coastline sites, filled while registering land/ocean boundaries.
 
 	void GeneratePlates_RedBlobRandomFill();
 	void GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors, TArray<int32>& OutHalfEdgeIndices) const;
@@ -553,6 +609,7 @@ protected:
 	double  ComputeBoundaryElevation_Gainey(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
 	double  ComputeBoundaryElevation_Hybrid(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
 	double  ComputeBoundaryElevation_Hybrid2(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB);
+	EGeoBoundaryInfluenceType ClassifyBoundaryInfluence(const FPlateBoundary& Boundary, const FPlateData& PlateA, const FPlateData& PlateB) const;
 
 	// Mirror of Gainey's blurPlateBoundaryStress(): smooth Pressure/Shear across
 	// adjacent PlateBoundaries before they get classified into elevation regimes.
@@ -575,9 +632,13 @@ protected:
 
 	void AssignElevations();
 
+	/** Registers one coastline edge after both endpoint elevations are final. */
+	void TryRegisterLandOceanBoundary(int32 SiteA, int32 SiteB, int32 HalfEdgeAB, TSet<uint64>& LandOceanBoundaryKeys, TSet<int32>& DistanceToOceanSeedKeys);
+
 	// MINECRAFT TERRAIN STYLE FUNCTIONS
-	void BuildErosionControlPerSite();
+	void BuildErosionControlPerSite();// DEPRECATED but kept for reference
 	void BuildErosionControlPerSite_Slope();
+	void BuildTerrainSurfaceFields();
 
 	// COLOR DEBUGGING
 	uint32 BuildPackedColor(const int32 PlateIndex) const;

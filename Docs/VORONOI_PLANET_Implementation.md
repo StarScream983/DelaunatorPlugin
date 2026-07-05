@@ -735,4 +735,170 @@ void UGeoDelaunatorComponent::BuildErosionControlPerSite()
 }
 ```
 
----
+#### Peaks & Valleys
+
+Peaks & valleys is another low-frequency terrain-shape axis.
+
+It does not mean “detected real peaks and valleys.” It is a procedural control value used to choose terrain forms:
+
+- High / positive-ish values → peaks, ridges, jagged high forms
+- Low / negative-ish values → valleys, basins, flatter low forms
+- Middle values → normal terrain transitions
+
+In Minecraft it works with `continentalness`, `erosion`, and `weirdness` to pick terrain height from splines.
+
+##### Real Life
+
+Real peaks / valleys are mostly:
+
+- Peaks / ridges: local elevation maxima, high relief, tectonic uplift, volcanic / mountain building
+- Valleys / basins: local elevation minima, river incision, glacial carving, tectonic subsidence
+- Canyons: flow + downhill drainage, not just a noise value
+
+So real-life P&V should be based on local shape of elevation, not distance-to-boundary.
+
+##### How To Calculate It Here
+
+Since you already have `ElevationPerSite` and neighbors, calculate it from local elevation relative to neighbors.
+
+For each site `R`:
+
+```cpp
+NeighborAvg = average(ElevationPerSite[NeighborSite]);
+Relief = MaxNeighborElevation - MinNeighborElevation;
+LocalShape = ElevationPerSite[R] - NeighborAvg;
+```
+
+Then:
+
+- `LocalShape > 0` → peak / ridge tendency
+- `LocalShape < 0` → valley / basin tendency
+- `LocalShape ~= 0` → flat / transition
+
+Normalize to `[-1, 1]`:
+
+```cpp
+PeaksValleys = Clamp(LocalShape / ShapeScale, -1, 1);
+```
+
+Suggested first value:
+
+```cpp
+ShapeScale = 0.08f;
+```
+
+##### Better Version
+
+Combine local shape with absolute elevation:
+
+```cpp
+const float LocalShape = CurrentElevation - NeighborAvg;
+const float LocalShape01 = FMath::Clamp(LocalShape / ShapeScale, -1.0f, 1.0f);
+const float ElevBias = FMath::Clamp(CurrentElevation / ElevationScale, -1.0f, 1.0f);
+
+PeaksValleysPerSite[R] = FMath::Clamp(
+	0.75f * LocalShape01 + 0.25f * ElevBias,
+	-1.0f,
+	1.0f);
+```
+
+Suggested:
+
+```cpp
+ShapeScale = 0.08f;
+ElevationScale = 0.45f;
+```
+
+##### Ocean Rule
+
+For ocean, set:
+
+```cpp
+PeaksValleysPerSite[R] = 0.0f;
+```
+
+Or later make a separate seafloor version. Don’t mix land P&V with ocean yet.
+
+##### Recommendation
+
+Compute it as a separate buffer later:
+
+```cpp
+TArray<float> PeaksValleysPerSite; // [-1 valley, +1 peak]
+```
+
+Same neighbor loop style as erosion. It should be local terrain form, not Minecraft noise-only, because your project already has tectonic elevation.
+
+##### Main Control
+
+Tectonics / local province is the big one.
+
+It sets whether an area tends to be:
+
+- Mountain belt / ridge
+- Plateau
+- Basin
+- Rift valley
+- Volcanic highland
+- Craton / stable flat interior
+
+So for your planet, P&V should mostly come from tectonic elevation + local shape.
+
+##### Soil Type / Soil Depth
+
+They matter, but more for surface expression, not the first-order peak / valley layout.
+
+- Thin soil / exposed bedrock → sharper peaks, stronger relief
+- Deep soil / sediment → smoother hills, filled valleys
+- Weak rock → wider valleys, more rounded slopes
+- Hard rock → cliffs, ridges, resistant peaks
+
+So they should modulate P&V/details later, not define the base P&V field.
+
+##### Good Layering
+
+- Tectonics: creates broad mountains, basins, plateaus
+- P&V: local shape from elevation vs neighbors
+- Erosion / material: slope, rock / soil, climate modify sharpness
+- Hydrology: carves valleys / canyons
+
+So yes: tectonic province is primary; soil type/depth are secondary modifiers.
+
+##### Current Implementation Direction
+
+`AssignElevations()` now registers `FLandOceanBoundary` edges while the elevation BFS runs. When a finalized edge crosses sea level, it saves a normalized boundary:
+
+- `LandSite` is always the land endpoint
+- `OceanSite` is always the ocean endpoint
+- `HalfEdgeLandToOcean` / `HalfEdgeOceanToLand` keep shoreline orientation
+- `LandOceanBoundaryQueue` stores unique land-side coastline sites for the later inward coastal BFS
+
+`BuildTerrainSurfaceFields()` will consume `LandOceanBoundaryQueue` to spread inward from the shoreline for a small number of rings. That gives the local coastal distance needed by province rules such as `DistOcean < 3`.
+
+Local province classification then combines:
+
+- `ElevationPerSite`
+- `DistanceToBoundary`
+- coastline distance from the land/ocean boundary BFS
+- boundary type flags later (`bNearSubductionBoundary`, `bNearDivergentBoundary`)
+- local terrain metrics such as slope, relief, and P&V
+
+```cpp
+EGeoProvince ClassifyProvince(int32 Site) {
+double Elev = ElevationPerSite[Site];
+int32 DistBound = DistanceToBoundary[Site];
+bool bVolcanic = bNearSubductionBoundary[Site]; // from boundary type pass
+bool bDiverge = bNearDivergentBoundary[Site];
+int32 DistOcean = DistanceToOcean[Site];
+
+if (!bIsLand[Site]) return EGeoProvince::AbyssalPlain;
+if (bVolcanic && Elev>0.3) return EGeoProvince::VolcanicHighland;
+if (bVolcanic && Elev<0.1) return EGeoProvince::IslandArc;
+if (bDiverge && Elev<0.15) return EGeoProvince::RiftZone;
+if (Elev > 0.5) return EGeoProvince::FoldBelt;
+if (DistBound > 15 && Elev < 0.2) return EGeoProvince::Craton; // old, flat, interior
+if (DistOcean < 3 && Elev < 0.2) return EGeoProvince::CoastalPlain;
+if (DistBound > 8 && Elev < 0.35) return EGeoProvince::Shield;
+return EGeoProvince::Craton; // fallback
+}
+```

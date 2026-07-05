@@ -1151,7 +1151,6 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	GeneratePlates_RedBlobRandomFill();
 	//AssignElevations_RedBlob1843();
 	AssignElevations();
-	//BuildErosionControlPerSite();
 	BuildErosionControlPerSite_Slope();
 
 	/**IT CAN BE ADDED TO THE SECOND PASS OF THE BFS, FROM BOUDARY TO PLATE CENTER,
@@ -1773,6 +1772,46 @@ double UGeoDelaunatorComponent::ComputeBoundaryElevation_Hybrid2(
 }
 #pragma endregion
 
+EGeoBoundaryInfluenceType UGeoDelaunatorComponent::ClassifyBoundaryInfluence(
+	const FPlateBoundary& Boundary,
+	const FPlateData& PlateA,
+	const FPlateData& PlateB) const
+{
+	// This is the compact boundary class that gets carried inward with DistanceToBoundary.
+	// Local provinces use it later for rules like subduction -> volcanic highland/island arc
+	// and divergent -> rift zone.
+	// Keep this congruent with the active ComputeBoundaryElevation(): Pressure > 0 is
+	// converging, Pressure <= 0 is diverging.
+	const double Pressure = Boundary.Pressure;
+	const double Shear = Boundary.Shear;
+	const bool bSubduction = PlateA.bIsOceanic != PlateB.bIsOceanic;
+
+	if (FMath::Abs(Pressure) <= 0.05 && Shear > 0.3)
+	{
+		return EGeoBoundaryInfluenceType::Transform;
+	}
+
+	if (Pressure > 0.05) // convergence threshold, originally 0.0
+	{
+		if (Shear > 0.3) // shear threshold
+		{
+			// Oblique convergence / transpression: convergence plus lateral shear.
+			// Later province/detail rules can use this for linear mountain belts and parallel ridges.
+			return EGeoBoundaryInfluenceType::ObliqueConvergent;
+		}
+
+		// Oceanic/continental convergence is treated as subduction for province purposes.
+		if (bSubduction)
+		{
+			return EGeoBoundaryInfluenceType::Subduction;
+		}
+
+		return EGeoBoundaryInfluenceType::Convergent;
+	}
+
+	return EGeoBoundaryInfluenceType::Divergent;
+}
+
 #pragma region Red Blob 1843 elevation (file-local noise + distance fields + site heightfield)
 namespace
 {
@@ -2167,6 +2206,9 @@ void UGeoDelaunatorComponent::AssignElevations()
 	// traces back to the same boundary spike it originated from
 	TArray<double> NearestBoundaryElevation;
 	DistanceToBoundary.Init(INT32_MAX, NumSites);
+	// Per-site boundary influence for local province buildup.
+	// Boundary seeds set this first, then the BFS carries it inward with distance/elevation.
+	ProximityBoundaryTypePerSite.Init(EGeoBoundaryInfluenceType::None, NumSites);
 	NearestBoundaryElevation.Init(0.0, NumSites);
 
 	// Sites enter when first discovered, processed in order of discovery
@@ -2187,6 +2229,17 @@ void UGeoDelaunatorComponent::AssignElevations()
 	TArray<double> BoundarySum;   BoundarySum.Init(0.0, NumSites);
 	TArray<int32>  BoundaryCount; BoundaryCount.Init(0,  NumSites);
 
+	auto ApplyBoundaryType = [&](int32 Site, EGeoBoundaryInfluenceType Type)
+	{
+		// Boundary sites can touch several plate-boundary edges.
+		// Keep the strongest nearby boundary type so later local province rules know
+		// whether this area is influenced by subduction, divergence, transform, etc.
+		if (static_cast<uint8>(Type) > static_cast<uint8>(ProximityBoundaryTypePerSite[Site]))
+		{
+			ProximityBoundaryTypePerSite[Site] = Type;
+		}
+	};
+
 	for (const FPlateBoundary& Boundary : PlateBoundaries)
 	{
 		const FPlateData& PlateA = Plates[Boundary.PlateA];
@@ -2194,12 +2247,16 @@ void UGeoDelaunatorComponent::AssignElevations()
 
 		// Peak or trough for this boundary — the value the BFS will decay from
 		const double BoundaryElev = ComputeBoundaryElevation(Boundary, PlateA, PlateB);
+		// Classify the plate-boundary regime once at the source; the BFS propagates it inward.
+		const EGeoBoundaryInfluenceType BoundaryType = ClassifyBoundaryInfluence(Boundary, PlateA, PlateB);
 
 		// Each boundary edge contributes to both of its endpoint sites
 		BoundarySum  [Boundary.SiteA] += BoundaryElev;
 		BoundarySum  [Boundary.SiteB] += BoundaryElev;
 		BoundaryCount[Boundary.SiteA] += 1;
 		BoundaryCount[Boundary.SiteB] += 1;
+		ApplyBoundaryType(Boundary.SiteA, BoundaryType);
+		ApplyBoundaryType(Boundary.SiteB, BoundaryType);
 	}
 
 	// Materialise per-site averages and seed the BFS queue
@@ -2229,6 +2286,14 @@ void UGeoDelaunatorComponent::AssignElevations()
 	TArray<int32> Neighbors;
 	TArray<int32> HalfEdgeIndices;  // required by GetVoronoiNeighbors signature, unused here
 
+	LandOceanBoundaries.Reset();
+	LandOceanBoundaryQueue.Empty();
+
+	// Local dedupe table for this elevation build only.
+	// A site can own multiple coastline edges, so dedupe by unordered edge pair, not by site.
+	TSet<uint64> LandOceanBoundaryKeys;
+	TSet<int32> DistanceToOceanSeedKeys;
+
 	// Visits every site exactly once — O(N) total, same cost as plate fill BFS
 	int32 CurrentSite;
 	while (Queue.Dequeue(CurrentSite))
@@ -2238,8 +2303,11 @@ void UGeoDelaunatorComponent::AssignElevations()
 		int32  PlateIdx = PlateIdPerSite[CurrentSite];
 		double DesiredElev = Plates[PlateIdx].DesiredElevation;
 		GetVoronoiNeighbors(CurrentSite, Neighbors, HalfEdgeIndices);
-		for (int32 NeighborSite : Neighbors)
+		for (int32 NeighborIdx = 0; NeighborIdx < Neighbors.Num(); ++NeighborIdx)
 		{
+			const int32 NeighborSite = Neighbors[NeighborIdx];
+			const int32 HalfEdgeToNeighbor = HalfEdgeIndices.IsValidIndex(NeighborIdx) ? HalfEdgeIndices[NeighborIdx] : INDEX_NONE;
+
 			// INT32_MAX = not yet reached → this is its shortest path from a boundary
 			if (DistanceToBoundary[NeighborSite] == INT32_MAX)
 			{
@@ -2267,6 +2335,9 @@ void UGeoDelaunatorComponent::AssignElevations()
 
 				DistanceToBoundary[NeighborSite] = NewDist;
 				NearestBoundaryElevation[NeighborSite] = NearestElev;
+				// Local province buildup: this neighbor belongs to the same nearest-boundary
+				// influence chain as CurrentSite, so it inherits CurrentSite's boundary type.
+				ProximityBoundaryTypePerSite[NeighborSite] = ProximityBoundaryTypePerSite[CurrentSite];
 
 				// for minecraft erosion control
 				MaxDist = FMath::Max(MaxDist, static_cast<float>(NewDist));
@@ -2279,7 +2350,14 @@ void UGeoDelaunatorComponent::AssignElevations()
 					DistanceFactor
 				);
 
+				// Neighbor elevation is final now; compare this new edge immediately instead of doing a post-BFS scan.
+				TryRegisterLandOceanBoundary(CurrentSite, NeighborSite, HalfEdgeToNeighbor, LandOceanBoundaryKeys, DistanceToOceanSeedKeys);
 				Queue.Enqueue(NeighborSite);
+			}
+			else
+			{
+				// Already-visited neighbor means both endpoints are final; this catches grazed/cross-tree coastline edges.
+				TryRegisterLandOceanBoundary(CurrentSite, NeighborSite, HalfEdgeToNeighbor, LandOceanBoundaryKeys, DistanceToOceanSeedKeys);
 			}
 		}
 	}
@@ -2288,6 +2366,70 @@ void UGeoDelaunatorComponent::AssignElevations()
 	InvMaxDist = 1.0f / MaxDist;
 }
 
+void UGeoDelaunatorComponent::TryRegisterLandOceanBoundary(int32 SiteA, int32 SiteB, int32 HalfEdgeAB, TSet<uint64>& LandOceanBoundaryKeys, TSet<int32>& DistanceToOceanSeedKeys)
+{
+	// Only a finalized land/ocean edge becomes a coastline boundary.
+	// Same-type edges (land-land or ocean-ocean) are ignored.
+	const float ElevA = ElevationPerSite[SiteA];
+	const float ElevB = ElevationPerSite[SiteB];
+	const bool bAIsLand = ElevA >= 0.0f;
+	const bool bBIsLand = ElevB >= 0.0f;
+
+	if (bAIsLand == bBIsLand)
+	{
+		return;
+	}
+
+	/**
+	 * Duplicate coastline edges can be discovered from both directions (A->B and B->A).
+	 * To dedupe them, the two site ids are first sorted and packed into one uint64 edge key.
+	 *
+	 * TSet then hashes that uint64 key internally. The hash selects a small bucket where
+	 * the key should live, so Contains() only checks that bucket instead of looping through
+	 * every saved FLandOceanBoundary. In the normal case this is effectively O(1); only hash
+	 * collisions require checking more than one key in the selected bucket.
+	 */
+	// Pack the unordered site pair into a stable key so A->B and B->A dedupe to the same edge.
+	const int32 KeyA = FMath::Min(SiteA, SiteB);
+	const int32 KeyB = FMath::Max(SiteA, SiteB);
+	const uint64 EdgeKey = (uint64(uint32(KeyA)) << 32) | uint32(KeyB);
+
+	if (LandOceanBoundaryKeys.Contains(EdgeKey))
+	{
+		return;
+	}
+	LandOceanBoundaryKeys.Add(EdgeKey);
+
+	// HalfEdgeAB points from SiteA to SiteB; Twin points back from SiteB to SiteA.
+	// Store both in land->ocean / ocean->land orientation for later shoreline work.
+	const int32 HalfEdgeBA = HalfEdge_Buffer.IsValidIndex(HalfEdgeAB)
+		? HalfEdge_Buffer[HalfEdgeAB].Twin
+		: INDEX_NONE;
+
+	FLandOceanBoundary Boundary;
+
+	// Normalize the saved edge so downstream code never has to guess which endpoint is land.
+	Boundary.LandSite = bAIsLand ? SiteA : SiteB;
+	Boundary.OceanSite = bAIsLand ? SiteB : SiteA;
+	Boundary.LandPlate = PlateIdPerSite.IsValidIndex(Boundary.LandSite) ? PlateIdPerSite[Boundary.LandSite] : INDEX_NONE;
+	Boundary.OceanPlate = PlateIdPerSite.IsValidIndex(Boundary.OceanSite) ? PlateIdPerSite[Boundary.OceanSite] : INDEX_NONE;
+	Boundary.HalfEdgeLandToOcean = bAIsLand ? HalfEdgeAB : HalfEdgeBA;
+	Boundary.HalfEdgeOceanToLand = bAIsLand ? HalfEdgeBA : HalfEdgeAB;
+	Boundary.LandElevation = ElevationPerSite[Boundary.LandSite];
+	Boundary.OceanElevation = ElevationPerSite[Boundary.OceanSite];
+
+	LandOceanBoundaries.Add(Boundary);
+
+	// Seed the later DistanceToOcean BFS with unique land-side coastline cells.
+	// This avoids another full scan just to rediscover coast land sites.
+	if (!DistanceToOceanSeedKeys.Contains(Boundary.LandSite))
+	{
+		DistanceToOceanSeedKeys.Add(Boundary.LandSite);
+		LandOceanBoundaryQueue.Enqueue(Boundary.LandSite);
+	}
+}
+
+// DEPRECATED but kept for reference
 // i need to find where to incorporate
 void UGeoDelaunatorComponent::BuildErosionControlPerSite()
 {
@@ -2379,6 +2521,26 @@ void UGeoDelaunatorComponent::BuildErosionControlPerSite_Slope()
 			1.0f);
 	}
 }
+
+void UGeoDelaunatorComponent::BuildTerrainSurfaceFields()
+{
+	const int32 NumSites = PlateIdPerSite.Num();
+
+	// Post-elevation surface fields share the same per-site neighborhood metrics.
+	// This function will replace/absorb the standalone erosion pass once province,
+	// P&V, and soil rules are finalized.
+	ErosionControlPerSite.SetNumUninitialized(NumSites);
+	PeaksValleysPerSite.SetNumUninitialized(NumSites);
+	LocalProvincePerSite.SetNumUninitialized(NumSites);
+	SoilTypePerSite.SetNumUninitialized(NumSites);
+	SoilDepthPerSite.SetNumUninitialized(NumSites);
+
+	// TODO: Compute shared local metrics once per site:
+	// - Current elevation and ocean/land state
+	// - Neighbor average, relief, max downhill drop
+	// - Distance-to-ocean once the coastline BFS is added
+	// - Local province, erosion control, peaks/valleys, soil type/depth
+}
 #pragma endregion
 
 
@@ -2395,6 +2557,7 @@ uint32 UGeoDelaunatorComponent::BuildPackedColor(const int32 PlateIndex) const
 	return R | (G << 8) | (B << 16) | (255u << 24);
 }
 
+// DEPRECATED
 void UGeoDelaunatorComponent::BuildPlateDebugColors()
 {
 	VoronoiCellColors.Init(0, N);
