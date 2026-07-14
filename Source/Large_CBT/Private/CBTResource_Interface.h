@@ -31,6 +31,8 @@ private:
 	TArray<float> CPU_ElevationPerSite_Buffer;
 	TArray<float> CPU_DistanceToBoundaryNormPerSite_Buffer;
 	TArray<float> CPU_ErosionControlPerSite_Buffer;
+	TArray<uint32> CPU_LandDistanceField_Buffer;
+	float CPU_MaxLandDistance = 1.0f;
 
 	// CPU CBT BUFFERS
 	int32 D{ 0 };
@@ -67,6 +69,9 @@ private:
 	FBufferRHIRef ErosionControlPerSiteBuffer_RHI;
 	FShaderResourceViewRHIRef ErosionControlPerSiteBuffer_SRV;
 
+	FBufferRHIRef LandDistanceFieldBuffer_RHI;
+	FShaderResourceViewRHIRef LandDistanceFieldBuffer_SRV;
+
 	// GPU CBT buffers
 	FRWBufferStructured HalfEdges_Buffer;     // StructuredBuffer<FHalfEdge_CBT>
 	FRWBufferStructured Vertex_Buffer;
@@ -89,6 +94,8 @@ public:
 	FORCEINLINE FShaderResourceViewRHIRef GetElevationPerSiteSRV() const { return ElevationPerSiteBuffer_SRV; }
 	FORCEINLINE FShaderResourceViewRHIRef GetDistanceToBoundaryNormPerSiteSRV() const { return DistanceToBoundaryNormPerSiteBuffer_SRV; }
 	FORCEINLINE FShaderResourceViewRHIRef GetErosionControlPerSiteSRV() const { return ErosionControlPerSiteBuffer_SRV; }
+	FORCEINLINE FShaderResourceViewRHIRef GetLandDistanceFieldSRV() const { return LandDistanceFieldBuffer_SRV; }
+	FORCEINLINE float GetMaxLandDistance() const { return CPU_MaxLandDistance; }
 
 	/** Returns true if the two required GPU buffers have been initialized. */
 	FORCEINLINE bool IsGPUReady() const { return FibonacciPoints_Buffer.SRV.IsValid() && SphericalTriangles_Buffer.SRV.IsValid(); }
@@ -117,6 +124,7 @@ public:
 	void PrimeElevationPerSiteBuffer(const TArray<float>& InElevationPerSite);
 	void PrimeDistanceToBoundaryNormPerSiteBuffer(const TArray<float>& InDistanceNormPerSite);
 	void PrimeErosionControlPerSiteBuffer(const TArray<float>& InErosionControlPerSite);
+	void PrimeLandDistanceFieldBuffer(const TArray<uint32>& InLandDistanceField, float InMaxLandDistance);
 
 private:
 
@@ -141,4 +149,5 @@ private:
 	void UploadElevationPerSiteBufferToGPU();
 	void UploadDistanceToBoundaryNormPerSiteBufferToGPU();
 	void UploadErosionControlPerSiteBufferToGPU();
+	void UploadLandDistanceFieldBufferToGPU();
 };

@@ -41,8 +41,10 @@ struct FGeoVoronoiIndirectInstancingUserData : public FOneFrameResource
 	FRHIShaderResourceView* ElevationPerSiteSRV = nullptr;
 	FRHIShaderResourceView* DistanceToBoundaryNormPerSiteSRV = nullptr;
 	FRHIShaderResourceView* ErosionControlPerSiteSRV = nullptr;
+	FRHIShaderResourceView* LandDistanceFieldSRV = nullptr;
 
 	uint32 ColorDebugMode = 0;
+	float MaxLandDistance = 1.0f;
 };
 
 /*

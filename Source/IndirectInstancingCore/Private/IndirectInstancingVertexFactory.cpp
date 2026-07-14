@@ -66,7 +66,9 @@ public:
 		ElevationPerSiteParameter.Bind(ParameterMap, TEXT("ElevationPerSite"));
 		DistanceToBoundaryNormPerSiteParameter.Bind(ParameterMap, TEXT("DistanceToBoundaryNormPerSite"));
 		ErosionControlPerSiteParameter.Bind(ParameterMap, TEXT("ErosionControlPerSite"));
+		LandDistanceFieldParameter.Bind(ParameterMap, TEXT("LandDistanceField"));
 		ColorDebugModeParameter.Bind(ParameterMap, TEXT("ColorDebugMode"));
+		MaxLandDistanceParameter.Bind(ParameterMap, TEXT("MaxLandDistance"));
 	}
 
 	void GetElementShaderBindings(
@@ -123,9 +125,17 @@ public:
 		{
 			ShaderBindings.Add(ErosionControlPerSiteParameter, UserData->ErosionControlPerSiteSRV);
 		}
+		if (LandDistanceFieldParameter.IsBound() && UserData->LandDistanceFieldSRV)
+		{
+			ShaderBindings.Add(LandDistanceFieldParameter, UserData->LandDistanceFieldSRV);
+		}
 		if (ColorDebugModeParameter.IsBound())
 		{
 			ShaderBindings.Add(ColorDebugModeParameter, UserData->ColorDebugMode);
+		}
+		if (MaxLandDistanceParameter.IsBound())
+		{
+			ShaderBindings.Add(MaxLandDistanceParameter, UserData->MaxLandDistance);
 		}
 	}
 
@@ -141,7 +151,9 @@ protected:
 	LAYOUT_FIELD(FShaderResourceParameter, ElevationPerSiteParameter);
 	LAYOUT_FIELD(FShaderResourceParameter, DistanceToBoundaryNormPerSiteParameter);
 	LAYOUT_FIELD(FShaderResourceParameter, ErosionControlPerSiteParameter);
+	LAYOUT_FIELD(FShaderResourceParameter, LandDistanceFieldParameter);
 	LAYOUT_FIELD(FShaderParameter, ColorDebugModeParameter);
+	LAYOUT_FIELD(FShaderParameter, MaxLandDistanceParameter);
 };
 
 IMPLEMENT_TYPE_LAYOUT(FGeoVoronoiIndirectInstancingShaderParameters);

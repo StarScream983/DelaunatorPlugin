@@ -152,6 +152,7 @@ Buffer<uint> VoronoiCellColors;
 Buffer<float> ElevationPerSite;     // PF_R32_FLOAT, indexed by SiteId / Voronoi cell index
 Buffer<float> DistanceToBoundaryNormPerSite; // 0..1 normalized hop distance from plate boundary (AssignElevations BFS)
 Buffer<float> ErosionControlPerSite; // Minecraft erosion axis per site, [-1 rugged, +1 flat]
+Buffer<uint> LandDistanceField; // raw inland BFS hop count (0 = ocean / unreached, 1 = coast)
 
 /** Reconstruct double-precision position from HighLow pair (as float math on GPU). */
 float3 ReconstructPosition(FVector3_HighLow v)
@@ -280,7 +281,7 @@ float4 GeoVoronoiRedBlob1843Colormap(float Elev, float Moisture)
 }
 
 /** Mode matches `EGeoVoronoiPlanetColorDebug` on CPU. */
-float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint PackedCellColor, float DistNorm, float ErosionControl)
+float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint PackedCellColor, float DistNorm, float ErosionControl, uint LandDistHops, float MaxLandDist)
 {
     if (Mode == 0u)
     {
@@ -321,6 +322,41 @@ float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint P
         float3 cLowErosion = float3(0.95f, 0.25f, 0.12f);
         float3 cHighErosion = float3(0.15f, 0.55f, 0.95f);
         float3 rgb = lerp(cLowErosion, cHighErosion, t);
+        return float4(rgb, 1.0f);
+    }
+    //if (Mode == 6u)
+    //{
+    //    // Ocean: deep blue. Land: cyan (coast, hops=1) → orange (interior) over [0,1].
+    //    if (Elev < 0.0f)
+    //    {
+    //        return float4(0.05f, 0.12f, 0.82f, 1.0f);
+    //    }
+    //    // Coast is seeded at hop 1, not 0 — remap so coast=0, max inland=1.
+    //    float t = 0.0f;
+    //    const float MaxLand = max(MaxLandDist, 1.0f);
+    //    if (LandDistHops > 0u && MaxLand > 1.0f)
+    //    {
+    //        t = saturate((float(LandDistHops) - 1.0f) / (MaxLand - 1.0f));
+    //    }
+    //    float3 cCoast = float3(0.0f, 0.88f, 0.95f);
+    //    float3 cInterior = float3(0.98f, 0.52f, 0.08f);
+    //    float3 rgb = lerp(cCoast, cInterior, t);
+    //    return float4(rgb, 1.0f);
+    //}
+    if (Mode == 6u)
+    {
+        // Ocean: deep blue. Land: stepped cyan (near coast) → orange (interior).
+        if (Elev < 0.0f)
+        {
+            return float4(0.05f, 0.12f, 0.82f, 1.0f);
+        }
+        const float MaxLand = max(MaxLandDist, 1.0f);
+        const float NumStepBands = 16.0f;
+        float t = saturate(float(LandDistHops) / MaxLand);
+        t = floor(t * NumStepBands) / NumStepBands;
+        float3 cCoast = float3(0.0f, 0.88f, 0.95f);
+        float3 cInterior = float3(0.98f, 0.52f, 0.08f);
+        float3 rgb = lerp(cCoast, cInterior, t);
         return float4(rgb, 1.0f);
     }
     return HashUIntToColor(SiteId);

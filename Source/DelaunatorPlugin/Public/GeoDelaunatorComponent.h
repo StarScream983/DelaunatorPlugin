@@ -344,6 +344,7 @@ enum class EGeoVoronoiPlanetColorDebug : uint8
 	OceanLandMask = 3,       // Red Blob 1843 `colormap.js` elevation colors (ocean depth + land→white peaks)
 	DistanceToBoundary = 4, // heatmap of BFS distance — confirms mountain shapes
 	ErosionControl = 5,     // Minecraft erosion axis per site [-1 rugged, +1 flat]
+	LandDistance = 6,       // inland BFS hop count from coastline (0 = ocean / unreached)
 };
 
 UCLASS(Blueprintable, ClassGroup = (Custom), meta = (BlueprintSpawnableComponent), hideCategories = (Activation, Collision, Cooking, HLOD, Navigation, Object, Physics, VirtualTexture))
@@ -525,6 +526,7 @@ protected:
 
 public:
 	FORCEINLINE float GetPlanetRadius() const { return (float)PlanetRadius; }
+	FORCEINLINE float GetMaxLandDistance() const { return MaxLandDistance; }
 	FORCEINLINE TSharedPtr<FCBTResource_Interface> GetCBTResources() const { return CBTResources; }
 
 	//~ Begin IGeoDelaunatorComponent_Interface
@@ -593,7 +595,13 @@ protected:
 	TArray<float> ErosionControlPerSite;  // Minecraft erosion axis per site, [-1, 1]
 	TArray<float> PeaksValleysPerSite;      // [-1 = valley / basin, +1 = peak / ridge]
 
-	// TERRAIN SURFACE FIELDS: for local province classification and biome selection	
+	// TERRAIN SURFACE FIELDS: for local province classification and biome selection
+	float MaxLandDistance = 1.0f; // max distance of LandSite to ocean boundary, used to normalize the distance field
+	TArray<uint32> LandDistanceField; // distance of LandSite to ocean boundary
+	TArray<uint32> OceanDistanceField; // distance of OceanSite to land boundary
+	// Land distance BFS: sites already queued or visited (filled in TryRegisterLandOceanBoundary, used in BuildTerrainSurfaceFields).
+	// dedupe hash map to avoid duplicates in the BuildTerrainSurfaceFields BFS
+	TSet<int32> LandDistanceSeen;
 	TArray<FLandOceanBoundary> LandOceanBoundaries;
 	TArray<EGeoProvince> LocalProvincePerSite; // Local province classification used by soil, biome, and material rules.
 	TArray<uint8> SoilTypePerSite;          // Compact soil/material class id for biome/material selection.
@@ -633,7 +641,7 @@ protected:
 	void AssignElevations();
 
 	/** Registers one coastline edge after both endpoint elevations are final. */
-	void TryRegisterLandOceanBoundary(int32 SiteA, int32 SiteB, int32 HalfEdgeAB, TSet<uint64>& LandOceanBoundaryKeys, TSet<int32>& DistanceToOceanSeedKeys);
+	void TryRegisterLandOceanBoundary(int32 SiteA, int32 SiteB, int32 HalfEdgeAB, TSet<uint64>& LandOceanBoundaryKeys);
 
 	// MINECRAFT TERRAIN STYLE FUNCTIONS
 	void BuildErosionControlPerSite();// DEPRECATED but kept for reference

@@ -2,6 +2,7 @@
 
 
 #include "GeoDelaunatorComponent.h"
+#include "Containers/Queue.h"
 #include "CBTResource_Interface.h"
 #include "IndirectInstancingSceneProxy.h"
 #include <string>
@@ -275,11 +276,12 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 			"1843 colormap (Red Blob)",
 			"Distance to boundary (BFS)",
 			"Erosion control (Minecraft)",
+			"Land distance (coast BFS)",
 		};
 		int32 ColorDbgIdx = static_cast<int32>(PlanetColorDebug);
 		if (ImGui::Combo("Planet color debug", &ColorDbgIdx, PlanetColorDebugLabels, UE_ARRAY_COUNT(PlanetColorDebugLabels)))
 		{
-			PlanetColorDebug = static_cast<EGeoVoronoiPlanetColorDebug>(FMath::Clamp(ColorDbgIdx, 0, 5));
+			PlanetColorDebug = static_cast<EGeoVoronoiPlanetColorDebug>(FMath::Clamp(ColorDbgIdx, 0, 6));
 		}
 	}
 	ImGui::End();
@@ -1151,7 +1153,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	GeneratePlates_RedBlobRandomFill();
 	//AssignElevations_RedBlob1843();
 	AssignElevations();
-	BuildErosionControlPerSite_Slope();
+	BuildTerrainSurfaceFields();
 
 	/**IT CAN BE ADDED TO THE SECOND PASS OF THE BFS, FROM BOUDARY TO PLATE CENTER,
 	*  WHERE THE DISTANCE TO BOUNDARY IS CALCULATED SIMULTANEOUSLY AS THE ELEVATION ASSIGNMENT, 
@@ -1182,6 +1184,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	CBTResources->PrimeElevationPerSiteBuffer(ElevationPerSite);
 	CBTResources->PrimeDistanceToBoundaryNormPerSiteBuffer(DistanceToBoundaryNorm);
 	CBTResources->PrimeErosionControlPerSiteBuffer(ErosionControlPerSite);
+	CBTResources->PrimeLandDistanceFieldBuffer(LandDistanceField, MaxLandDistance);
 	CBTResources->InitFromCPU(D, HalfEdge_Buffer, VoronoiGeoCenters_HL, RootBisectors_Buffer, CBT_Buffer);
 
 	// CBTResources is now valid — recreate the scene proxy so it captures the new pointer.
@@ -2259,6 +2262,7 @@ void UGeoDelaunatorComponent::AssignElevations()
 		ApplyBoundaryType(Boundary.SiteB, BoundaryType);
 	}
 
+	// can be embedded in one of the loops above
 	// Materialise per-site averages and seed the BFS queue
 	for (int32 Site = 0; Site < NumSites; ++Site)
 	{
@@ -2288,11 +2292,12 @@ void UGeoDelaunatorComponent::AssignElevations()
 
 	LandOceanBoundaries.Reset();
 	LandOceanBoundaryQueue.Empty();
+	LandDistanceSeen.Reset();
+	LandDistanceField.Init(0, NumSites);
 
 	// Local dedupe table for this elevation build only.
 	// A site can own multiple coastline edges, so dedupe by unordered edge pair, not by site.
 	TSet<uint64> LandOceanBoundaryKeys;
-	TSet<int32> DistanceToOceanSeedKeys;
 
 	// Visits every site exactly once — O(N) total, same cost as plate fill BFS
 	int32 CurrentSite;
@@ -2351,22 +2356,26 @@ void UGeoDelaunatorComponent::AssignElevations()
 				);
 
 				// Neighbor elevation is final now; compare this new edge immediately instead of doing a post-BFS scan.
-				TryRegisterLandOceanBoundary(CurrentSite, NeighborSite, HalfEdgeToNeighbor, LandOceanBoundaryKeys, DistanceToOceanSeedKeys);
+				TryRegisterLandOceanBoundary(CurrentSite, NeighborSite, HalfEdgeToNeighbor, LandOceanBoundaryKeys);
 				Queue.Enqueue(NeighborSite);
 			}
 			else
 			{
 				// Already-visited neighbor means both endpoints are final; this catches grazed/cross-tree coastline edges.
-				TryRegisterLandOceanBoundary(CurrentSite, NeighborSite, HalfEdgeToNeighbor, LandOceanBoundaryKeys, DistanceToOceanSeedKeys);
+				TryRegisterLandOceanBoundary(CurrentSite, NeighborSite, HalfEdgeToNeighbor, LandOceanBoundaryKeys);
 			}
 		}
 	}
 
+	// probably DEPRECATED
 	// invMaxDist for minecraft erosion control
 	InvMaxDist = 1.0f / MaxDist;
 }
+#pragma endregion
 
-void UGeoDelaunatorComponent::TryRegisterLandOceanBoundary(int32 SiteA, int32 SiteB, int32 HalfEdgeAB, TSet<uint64>& LandOceanBoundaryKeys, TSet<int32>& DistanceToOceanSeedKeys)
+// EROSION, P&V, LOCAL PROVINCE, SOIL TYPE, SOIL DEPTH, LAND SDF, OCEAN SDF, ALL TERRAIN SURFACE FIELDS
+#pragma region TERRAINFIELDS
+void UGeoDelaunatorComponent::TryRegisterLandOceanBoundary(int32 SiteA, int32 SiteB, int32 HalfEdgeAB, TSet<uint64>& LandOceanBoundaryKeys)
 {
 	// Only a finalized land/ocean edge becomes a coastline boundary.
 	// Same-type edges (land-land or ocean-ocean) are ignored.
@@ -2378,6 +2387,20 @@ void UGeoDelaunatorComponent::TryRegisterLandOceanBoundary(int32 SiteA, int32 Si
 	if (bAIsLand == bBIsLand)
 	{
 		return;
+	}
+
+	// Reject inland lakes: water on a continental plate is not open-ocean coastline, we don't wanna add it to the queue.
+	// PlateIdPerSite / bIsOceanic are fixed at generation; elevation can still dip below 0 inland.
+	// Do not register them in LandOceanBoundaries or seed the coastal DistOcean BFS from them.
+	//
+	// 1) Possible_LakeSiteID — SiteA and SiteB are neighbors; one is land, one is water. This is the water site.
+	// 2) Possible_LakeSite_PlateID — plate that owns Possible_LakeSiteID (from PlateIdPerSite, set at generation).
+	// 3) If Plates[Possible_LakeSite_PlateID].bIsOceanic is false, the water site is on a continental plate (lake) — return.
+	const int32 Possible_LakeSiteID = bAIsLand ? SiteB : SiteA;
+	const int32 Possible_LakeSite_PlateID = PlateIdPerSite.IsValidIndex(Possible_LakeSiteID) ? PlateIdPerSite[Possible_LakeSiteID] : INDEX_NONE;
+	if (Plates.IsValidIndex(Possible_LakeSite_PlateID) && !Plates[Possible_LakeSite_PlateID].bIsOceanic)
+	{
+		//return;
 	}
 
 	/**
@@ -2418,14 +2441,15 @@ void UGeoDelaunatorComponent::TryRegisterLandOceanBoundary(int32 SiteA, int32 Si
 	Boundary.LandElevation = ElevationPerSite[Boundary.LandSite];
 	Boundary.OceanElevation = ElevationPerSite[Boundary.OceanSite];
 
-	LandOceanBoundaries.Add(Boundary);
+	LandOceanBoundaries.Add(Boundary); // add to the list of land/ocean boundaries permanently
 
 	// Seed the later DistanceToOcean BFS with unique land-side coastline cells.
 	// This avoids another full scan just to rediscover coast land sites.
-	if (!DistanceToOceanSeedKeys.Contains(Boundary.LandSite))
+	if (!LandDistanceSeen.Contains(Boundary.LandSite))
 	{
-		DistanceToOceanSeedKeys.Add(Boundary.LandSite);
-		LandOceanBoundaryQueue.Enqueue(Boundary.LandSite);
+		LandDistanceSeen.Add(Boundary.LandSite); // add to the set of seen land sites to avoid duplicates in the BFS
+		LandDistanceField[Boundary.LandSite] = 1; // set the distance to 1 for the first ring of land sites
+		LandOceanBoundaryQueue.Enqueue(Boundary.LandSite); // enqueue the land site to the queue to start the BFS in BuildTerrainSurfaceFields
 	}
 }
 
@@ -2526,20 +2550,43 @@ void UGeoDelaunatorComponent::BuildTerrainSurfaceFields()
 {
 	const int32 NumSites = PlateIdPerSite.Num();
 
-	// Post-elevation surface fields share the same per-site neighborhood metrics.
-	// This function will replace/absorb the standalone erosion pass once province,
-	// P&V, and soil rules are finalized.
 	ErosionControlPerSite.SetNumUninitialized(NumSites);
 	PeaksValleysPerSite.SetNumUninitialized(NumSites);
 	LocalProvincePerSite.SetNumUninitialized(NumSites);
 	SoilTypePerSite.SetNumUninitialized(NumSites);
 	SoilDepthPerSite.SetNumUninitialized(NumSites);
 
-	// TODO: Compute shared local metrics once per site:
-	// - Current elevation and ocean/land state
-	// - Neighbor average, relief, max downhill drop
-	// - Distance-to-ocean once the coastline BFS is added
-	// - Local province, erosion control, peaks/valleys, soil type/depth
+	// max distance of LandSite to ocean boundary in uint32, used to normalize the distance field, must be turned into float later
+	uint32 intMaxLandDistance = 1;
+		
+	// get the neighbors of the current land site
+	TArray<int32> Neighbors;
+	TArray<int32> HalfEdgeIndices;
+	int32 CurrentSite = INDEX_NONE;
+
+	while (LandOceanBoundaryQueue.Dequeue(CurrentSite))
+	{
+		// increment intMaxLandDistance for the next ring of land sites
+		const uint32 NewDist = LandDistanceField[CurrentSite] + 1;
+		// get neighbors and half edge indices for the current land site (dunno why we need HalfEdgeIndices)
+		Neighbors.Reset(); HalfEdgeIndices.Reset();
+		GetVoronoiNeighbors(CurrentSite, Neighbors, HalfEdgeIndices);
+		for (int32 NeighborSite : Neighbors)
+		{
+			// if the neighbor is not yet visited, and is land, visit it
+			if (!LandDistanceSeen.Contains(NeighborSite) && ElevationPerSite[NeighborSite] >= 0.0f)
+			{				
+				intMaxLandDistance = FMath::Max(intMaxLandDistance, NewDist);
+
+				LandDistanceField[NeighborSite] = NewDist; // set the distance of the newly visited land site
+				LandOceanBoundaryQueue.Enqueue(NeighborSite); // enqueue the newly visited land site to the queue to visit its neighbors
+				LandDistanceSeen.Add(NeighborSite); // add the newly visited land site to the set of seen land sites to avoid duplicates in the BFS
+			}
+		}
+	}
+	
+	// turn the intMaxLandDistance into a float
+	MaxLandDistance = static_cast<float>(intMaxLandDistance);
 }
 #pragma endregion
 

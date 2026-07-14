@@ -393,6 +393,7 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 			ColorDebugMode = RenderData->GetPlanetColorDebugShaderValue_RenderThread();
 		}
 		UserData->ColorDebugMode = ColorDebugMode;
+		UserData->MaxLandDistance = 1.0f;
 
 		UserData->InstanceBufferSRV = DrawBuffers.InstanceBufferSRV;
 		UserData->CBT_FibonacciPointsSRV = nullptr;
@@ -404,6 +405,7 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 		UserData->ElevationPerSiteSRV = nullptr;
 		UserData->DistanceToBoundaryNormPerSiteSRV = nullptr;
 		UserData->ErosionControlPerSiteSRV = nullptr;
+		UserData->LandDistanceFieldSRV = nullptr;
 
 		if (CBTResources.IsValid() && CBTResources->IsGPUReady())
 		{
@@ -416,6 +418,8 @@ void FGeoVoronoiIndirectInstancingSceneProxy::GetDynamicMeshElements(const TArra
 			UserData->ElevationPerSiteSRV = CBTResources->GetElevationPerSiteSRV();
 			UserData->DistanceToBoundaryNormPerSiteSRV = CBTResources->GetDistanceToBoundaryNormPerSiteSRV();
 			UserData->ErosionControlPerSiteSRV = CBTResources->GetErosionControlPerSiteSRV();
+			UserData->LandDistanceFieldSRV = CBTResources->GetLandDistanceFieldSRV();
+			UserData->MaxLandDistance = CBTResources->GetMaxLandDistance();
 		}
 
 		UserData->LodViewOrigin = (FVector3f)MainView->ViewMatrices.GetViewOrigin();

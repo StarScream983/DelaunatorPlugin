@@ -8,6 +8,7 @@
 StructuredBuffer<QuadRenderInstance> InstanceBuffer;
 float3 LodViewOrigin;
 uint ColorDebugMode;
+float MaxLandDistance;
 
 struct FVertexFactoryInput
 {
@@ -54,7 +55,8 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
     const float Elev = ElevationPerSite[Instance.SiteId];
     const float DistNorm = DistanceToBoundaryNormPerSite[Instance.SiteId];
     const float ErosionCtrl = ErosionControlPerSite[Instance.SiteId];
-    Intermediates.VertexColor = GeoVoronoiPickDebugVertexColor(ColorDebugMode, Instance.SiteId, Elev, PackedCell, DistNorm, ErosionCtrl);
+    const uint LandDistHops = LandDistanceField[Instance.SiteId];
+    Intermediates.VertexColor = GeoVoronoiPickDebugVertexColor(ColorDebugMode, Instance.SiteId, Elev, PackedCell, DistNorm, ErosionCtrl, LandDistHops, MaxLandDistance);
 
 
     const float3 V0 = ReconstructPosition(VoronoiGeoCenters[Instance.GeoCenterA]);

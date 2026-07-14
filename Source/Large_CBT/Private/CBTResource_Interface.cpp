@@ -53,6 +53,13 @@ void FCBTResource_Interface::PrimeErosionControlPerSiteBuffer(const TArray<float
 	CPU_ErosionControlPerSite_Buffer = InErosionControlPerSite;
 }
 
+void FCBTResource_Interface::PrimeLandDistanceFieldBuffer(const TArray<uint32>& InLandDistanceField, float InMaxLandDistance)
+{
+	CPU_LandDistanceField_Buffer.Empty();
+	CPU_LandDistanceField_Buffer = InLandDistanceField;
+	CPU_MaxLandDistance = FMath::Max(InMaxLandDistance, 1.0f);
+}
+
 void FCBTResource_Interface::InitFromCPU(const int32 InD, const TArray<FHalfEdge_CBT>& InHalfEdges, const TArray<FVector3_HighLow>& InVertexBuffer, const TArray<FRootBisector_CBT>& InRootBisectors, const TArray<int32>& InCBTBuffer)
 {
 
@@ -247,6 +254,25 @@ void FCBTResource_Interface::InitRHI(FRHICommandListBase& RHICmdList)
 		UploadErosionControlPerSiteBufferToGPU();
 	}
 
+	if (CPU_LandDistanceField_Buffer.Num() > 0)
+	{
+		const uint32 NumBytes = CPU_LandDistanceField_Buffer.Num() * sizeof(uint32);
+		FRHIResourceCreateInfo CreateInfo(TEXT("LargeCBT_LandDistanceFieldBuffer"));
+
+		LandDistanceFieldBuffer_RHI = RHICmdList.CreateVertexBuffer(
+			NumBytes,
+			BUF_ShaderResource | BUF_Static,
+			ERHIAccess::SRVMask,
+			CreateInfo);
+
+		LandDistanceFieldBuffer_SRV = RHICmdList.CreateShaderResourceView(
+			LandDistanceFieldBuffer_RHI,
+			sizeof(uint32),
+			PF_R32_UINT);
+
+		UploadLandDistanceFieldBufferToGPU();
+	}
+
 	if (CPU_Voronoi_Cells_Color_Buffer.Num() > 0)
 	{
 		const uint32 NumBytes = CPU_Voronoi_Cells_Color_Buffer.Num() * sizeof(uint32);
@@ -404,6 +430,9 @@ void FCBTResource_Interface::ReleaseRHI()
 
 	ErosionControlPerSiteBuffer_SRV.SafeRelease();
 	ErosionControlPerSiteBuffer_RHI.SafeRelease();
+
+	LandDistanceFieldBuffer_SRV.SafeRelease();
+	LandDistanceFieldBuffer_RHI.SafeRelease();
 
 	HalfEdges_Buffer.Release();
 	Vertex_Buffer.Release();
@@ -740,4 +769,23 @@ void FCBTResource_Interface::UploadErosionControlPerSiteBufferToGPU()
 
 	FMemory::Memcpy(Dest, CPU_ErosionControlPerSite_Buffer.GetData(), NumBytes);
 	RHIUnlockBuffer(ErosionControlPerSiteBuffer_RHI);
+}
+
+void FCBTResource_Interface::UploadLandDistanceFieldBufferToGPU()
+{
+	if (!LandDistanceFieldBuffer_RHI.IsValid() || CPU_LandDistanceField_Buffer.Num() == 0)
+	{
+		return;
+	}
+
+	const uint32 NumBytes = CPU_LandDistanceField_Buffer.Num() * sizeof(uint32);
+
+	void* Dest = RHILockBuffer(
+		LandDistanceFieldBuffer_RHI,
+		0,
+		NumBytes,
+		RLM_WriteOnly);
+
+	FMemory::Memcpy(Dest, CPU_LandDistanceField_Buffer.GetData(), NumBytes);
+	RHIUnlockBuffer(LandDistanceFieldBuffer_RHI);
 }

@@ -902,3 +902,134 @@ if (DistBound > 8 && Elev < 0.35) return EGeoProvince::Shield;
 return EGeoProvince::Craton; // fallback
 }
 ```
+
+##### Terrain Surface Field Dependency Order
+
+`BuildTerrainSurfaceFields()` should build the post-elevation maps in dependency order, not as unrelated passes.
+
+Base inputs already available:
+
+- `ElevationPerSite`
+- `DistanceToBoundary`
+- `ProximityBoundaryTypePerSite`
+- `LandOceanBoundaryQueue` / coastal BFS result
+- Voronoi neighbor rings
+- low-frequency noise
+
+### Recommended order:
+
+1. Distance/coast info
+   - `DistOcean` / coastal rings
+   - `bIsLand` / `bIsCoastal`
+
+2. Local terrain metrics
+   - `NeighborAvg`
+   - `MaxDrop` / slope
+   - `Relief`
+   - `Prominence`
+   - `Elevation01`
+
+3. `LocalProvincePerSite` depends on:
+   - `ElevationPerSite`
+   - `DistanceToBoundary`
+   - `DistOcean`
+   - `ProximityBoundaryTypePerSite`
+   - local terrain metrics
+
+4. `PeaksValleysPerSite` depends on:
+   - `ElevationPerSite`
+   - `NeighborAvg`
+   - `Relief` / local shape
+   - optionally `LocalProvincePerSite`
+
+5. `ErosionControlPerSite` depends on:
+   - slope / `MaxDrop`
+   - `Prominence`
+   - `ElevationPerSite`
+   - `LocalProvincePerSite`
+   - noise
+
+6. `SoilTypePerSite` depends on:
+   - `LocalProvincePerSite`
+   - `ElevationPerSite`
+   - `DistOcean` / coast
+   - `ErosionControlPerSite`
+   - noise
+
+7. `SoilDepthPerSite` depends on:
+   - `SoilTypePerSite`
+   - `ErosionControlPerSite`
+   - slope / `Relief`
+   - `LocalProvincePerSite`
+   - `DistOcean` / coast
+
+First-pass rule: compute erosion before soil. If soil later needs to affect erosion, add a second refinement pass instead of making the first pass circular:
+- DistOcean / coast
+- local metrics
+- province
+- P&V
+- erosion
+- soil type
+- soil depth
+
+##### Soil type And Erosion
+
+`Soil/rock` means surface material resistance.
+
+Examples:
+
+- Hard bedrock / granite / basalt → resists erosion
+- Loose sediment / sand / soil → erodes easily
+- Deep soil → smooths terrain, fills small valleys
+- Exposed rock → sharper ridges / cliffs
+
+Suggested first-pass `SoilTypePerSite` classes:
+
+- `Bedrock` → exposed hard rock, cliffs, ridges, thin/no soil
+- `Granite` → resistant continental rock, sparse alpine/shrub foliage when shallow
+- `Basalt` → volcanic/oceanic rock, can become fertile when weathered
+- `VolcanicAsh` → loose volcanic material, fertile if moisture exists
+- `Sand` → beaches, dunes, deserts, sparse grasses/shrubs
+- `Silt` → floodplains, deltas, wetlands, fertile lowlands
+- `Clay` → water-retaining lowlands, wetlands, heavy soils
+- `MarineSediment` → abyssal/coastal deposits, mud flats, shallow marine plains
+- `Colluvium` → slope debris/talus below mountains and steep ridges
+- `Alluvium` → river/deposition material for later hydrology pass
+
+For `ErosionControlPerSite`, it should act as a modifier, not the main signal.
+
+Current erosion signal is mostly:
+
+```text
+slope + prominence + elevation + noise
+```
+
+Soil / rock modifies it like:
+
+```cpp
+FinalErosion = BaseErosion * MaterialErodibility;
+```
+
+Example erodibility:
+
+```text
+hard bedrock: 0.4
+basalt:       0.6
+normal soil:  1.0
+sand/silt:    1.2
+deep sediment: maybe smooth/fill instead of carve
+```
+
+So:
+
+- Steep granite mountain → high slope but reduced erosion
+- Steep soft sediment → strong erosion
+- Flat deep soil → low erosion, but high smoothing/deposition potential
+
+Important: for first pass, don’t let soil drive erosion yet because soil itself depends on erosion/province. That’s circular.
+
+Better order:
+
+1. Compute `BaseErosionControlPerSite`
+2. Compute soil type/depth from province + slope + erosion
+3. Later, optional second pass: adjust erosion by material erodibility
