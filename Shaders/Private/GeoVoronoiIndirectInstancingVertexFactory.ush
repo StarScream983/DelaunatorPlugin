@@ -78,7 +78,7 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
     }
 
     // Red Blob heights are subtle vs plate floors; scale up so radial lift reads at game scale.
-    const float ElevationScale = 0.02f;
+    const float ElevationScale = 0.015f;
     const float Radius = GeoVoronoiIndirectInstancingParams.PlanetRadius * (1.0f + Elev*ElevationScale);
     Intermediates.LocalPos = VertexPos * Radius;
     //Intermediates.LocalPos = VertexPos * GeoVoronoiIndirectInstancingParams.PlanetRadius;

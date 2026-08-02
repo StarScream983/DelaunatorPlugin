@@ -2243,6 +2243,7 @@ void UGeoDelaunatorComponent::AssignElevations()
 		}
 	};
 
+	// WHY IS THIS ON A LOOP? it can be done when the boundary is first created
 	for (const FPlateBoundary& Boundary : PlateBoundaries)
 	{
 		const FPlateData& PlateA = Plates[Boundary.PlateA];
@@ -2276,8 +2277,8 @@ void UGeoDelaunatorComponent::AssignElevations()
 		}
 	}
 
-	// MAXDIST to calculate minecraft erosion control
-	float MaxDist = 1.f;
+	// MAXDIST to calculate minecraft erosion control // DEPRECATED
+	//float MaxDist = 1.f;
 
 	/** ── Propagation Phase ────────────────────────────────────────────────────
 	* Controls how fast boundary elevation fades toward the plate resting floor
@@ -2335,8 +2336,8 @@ void UGeoDelaunatorComponent::AssignElevations()
 				// exponent 1.0 = linear, 2.0 = quadratic, 3.0+ = sharp peak
 
 				// INVERSE SQUARE — fast near boundary, very long tail
-				//const double k = 0.3;
-				//double DistanceFactor = 1.0 / (1.0 + (double)(NewDist * NewDist) * k);
+				// const double k = 0.3;
+				// double DistanceFactor = 1.0 / (1.0 + (double)(NewDist * NewDist) * k);
 
 				DistanceToBoundary[NeighborSite] = NewDist;
 				NearestBoundaryElevation[NeighborSite] = NearestElev;
@@ -2345,7 +2346,7 @@ void UGeoDelaunatorComponent::AssignElevations()
 				ProximityBoundaryTypePerSite[NeighborSite] = ProximityBoundaryTypePerSite[CurrentSite];
 
 				// for minecraft erosion control
-				MaxDist = FMath::Max(MaxDist, static_cast<float>(NewDist));
+				//MaxDist = FMath::Max(MaxDist, static_cast<float>(NewDist));
 
 				// Lerp: DistanceFactor = 1.0 (at boundary)  → pure NearestElev (spike or trench)
 				// DistanceFactor = 0.0 (deep interior) → pure DesiredElev (plate resting floor)
@@ -2369,7 +2370,7 @@ void UGeoDelaunatorComponent::AssignElevations()
 
 	// probably DEPRECATED
 	// invMaxDist for minecraft erosion control
-	InvMaxDist = 1.0f / MaxDist;
+	// InvMaxDist = 1.0f / MaxDist;
 }
 #pragma endregion
 
@@ -2551,7 +2552,7 @@ void UGeoDelaunatorComponent::BuildTerrainSurfaceFields()
 	const int32 NumSites = PlateIdPerSite.Num();
 
 	ErosionControlPerSite.SetNumUninitialized(NumSites);
-	PeaksValleysPerSite.SetNumUninitialized(NumSites);
+	PeaksValleysPerSite.Init(0.0f, NumSites);
 	LocalProvincePerSite.SetNumUninitialized(NumSites);
 	SoilTypePerSite.SetNumUninitialized(NumSites);
 	SoilDepthPerSite.SetNumUninitialized(NumSites);
@@ -2563,18 +2564,34 @@ void UGeoDelaunatorComponent::BuildTerrainSurfaceFields()
 	TArray<int32> Neighbors;
 	TArray<int32> HalfEdgeIndices;
 	int32 CurrentSite = INDEX_NONE;
+		
+
+	constexpr float ShapeScale = 0.08f;
+	constexpr float ElevationScale = 0.45f;
 
 	while (LandOceanBoundaryQueue.Dequeue(CurrentSite))
 	{
 		// increment intMaxLandDistance for the next ring of land sites
 		const uint32 NewDist = LandDistanceField[CurrentSite] + 1;
+		const float CurrentElevation = ElevationPerSite[CurrentSite];
+
 		// get neighbors and half edge indices for the current land site (dunno why we need HalfEdgeIndices)
 		Neighbors.Reset(); HalfEdgeIndices.Reset();
 		GetVoronoiNeighbors(CurrentSite, Neighbors, HalfEdgeIndices);
+
+		float NeighborSum = 0.0f;
+		float MinNeighborElevation = TNumericLimits<float>::Max();
+		float MaxNeighborElevation = TNumericLimits<float>::Lowest();
+
 		for (int32 NeighborSite : Neighbors)
 		{
+			const float NeighborElevation = ElevationPerSite[NeighborSite];
+			NeighborSum += NeighborElevation;
+			MinNeighborElevation = FMath::Min(MinNeighborElevation, NeighborElevation);
+			MaxNeighborElevation = FMath::Max(MaxNeighborElevation, NeighborElevation);
+
 			// if the neighbor is not yet visited, and is land, visit it
-			if (!LandDistanceSeen.Contains(NeighborSite) && ElevationPerSite[NeighborSite] >= 0.0f)
+			if (!LandDistanceSeen.Contains(NeighborSite) && NeighborElevation >= 0.0f)
 			{				
 				intMaxLandDistance = FMath::Max(intMaxLandDistance, NewDist);
 
@@ -2582,6 +2599,20 @@ void UGeoDelaunatorComponent::BuildTerrainSurfaceFields()
 				LandOceanBoundaryQueue.Enqueue(NeighborSite); // enqueue the newly visited land site to the queue to visit its neighbors
 				LandDistanceSeen.Add(NeighborSite); // add the newly visited land site to the set of seen land sites to avoid duplicates in the BFS
 			}
+		}
+
+		// LOCAL TERRAIN METRICS
+		if (Neighbors.Num() > 0)
+		{
+			const float NeighborAvg = NeighborSum / static_cast<float>(Neighbors.Num());
+			const float Relief [[maybe_unused]] = MaxNeighborElevation - MinNeighborElevation;
+			const float LocalShape = CurrentElevation - NeighborAvg;
+			const float LocalShape01 = FMath::Clamp(LocalShape / ShapeScale, -1.0f, 1.0f);
+			const float ElevBias = FMath::Clamp(CurrentElevation / ElevationScale, -1.0f, 1.0f);
+			PeaksValleysPerSite[CurrentSite] = FMath::Clamp(
+				0.75f * LocalShape01 + 0.25f * ElevBias,
+				-1.0f,
+				1.0f);
 		}
 	}
 	

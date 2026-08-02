@@ -1033,3 +1033,14 @@ Better order:
 1. Compute `BaseErosionControlPerSite`
 2. Compute soil type/depth from province + slope + erosion
 3. Later, optional second pass: adjust erosion by material erodibility
+
+
+How to implement vertex-based erosion without 3D noise fields
+
+Comparing cardinal spline tension to Minecraft's erosion parameter
+
+Architectural patterns for combining P&V with Voronoi terrain systems
+
+Techniques for procedural terrain smoothing beyond spline tension
+
+Handling terrain transition zones in voronoi-based mesh generation
