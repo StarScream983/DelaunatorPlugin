@@ -424,3 +424,404 @@ Yes — that’s a solid **distance LOD stack**, with a few caveats so the hando
 - Ground: if CBT still isn’t dense enough, prefer **more subdiv** or a **normal map**, not keeping full raymarch.
 
 So: orbit raymarch → approach CBT + fade raymarch → ground CBT only is a coherent plan; drive it with altitude / screen-space edge length, and share one height source across both paths.
+
+
+---
+
+
+Here’s the VF-side fix as drop-in replacements for `GeoVoronoiIndirectInstancingVertexFactory.ush`. Not applied to the repo.
+
+### 1) Intermediates — store local normal + world TBN
+
+```hlsl
+struct FVertexFactoryIntermediates
+{
+	float2 LocalUV;
+	float3 LocalPos;
+	float3 LocalNormal;   // same space as LocalPos (before LocalToWorld)
+	half3x3 TangentToWorld;
+	half TangentToWorldSign;
+	float4 VertexColor;
+	FSceneDataIntermediates SceneData;
+};
+```
+
+### 2) Build outward normal + TBN in `GetVertexFactoryIntermediates`
+
+Replace the normal line and add TBN construction at the end of that function:
+
+```hlsl
+	// Face normal in local planet space (same space as LocalPos)
+	float3 LocalNormal = normalize(cross(V1 - V0, V2 - V0));
+	// Ensure outward (away from planet center)
+	if (dot(LocalNormal, VertexPos) < 0.0f)
+	{
+		LocalNormal = -LocalNormal;
+	}
+	Intermediates.LocalNormal = LocalNormal;
+
+	const float ElevationScale = 0.015f;
+	const float Radius = GeoVoronoiIndirectInstancingParams.PlanetRadius * (1.0f + Elev * ElevationScale);
+	Intermediates.LocalPos = VertexPos * Radius;
+
+	// Orthonormal TBN from normal alone (no UV tangents)
+	float3 N = LocalNormal;
+	float3 Up = (abs(N.z) < 0.999f) ? float3(0, 0, 1) : float3(1, 0, 0);
+	float3 T = normalize(cross(Up, N));
+	float3 B = cross(N, T);
+	half3x3 TangentToLocal = half3x3(T, B, N); // rows: T, B, N
+
+	// Local → world (rotation only; matches how LocalPos is transformed)
+	FPrimitiveSceneData PrimitiveData = GetPrimitiveData(Intermediates);
+	float3x3 LocalToWorld = LWCToFloat3x3(PrimitiveData.LocalToWorld);
+	// Remove non-uniform scale so normals stay correct
+	float3 InvScale = PrimitiveData.InvNonUniformScaleAndDeterminantSign.xyz;
+	LocalToWorld[0] *= InvScale.x;
+	LocalToWorld[1] *= InvScale.y;
+	LocalToWorld[2] *= InvScale.z;
+
+	Intermediates.TangentToWorld = mul(TangentToLocal, (half3x3)LocalToWorld);
+	Intermediates.TangentToWorldSign = PrimitiveData.InvNonUniformScaleAndDeterminantSign.w;
+
+	// ... keep LocalUV / VertexColor as you already have ...
+```
+
+If `LWCToFloat3x3` isn’t available on your shader includes, use whatever your engine build exposes for “3x3 from `FLWCMatrix`” (VHM used a float4x4 cast; `GetLocalToWorld3x3(PrimitiveId)` is the LocalVF style when GPUScene primitive id works — you force PrimID 0, so prefer the PrimitiveData path above).
+
+### 3) Interpolants — carry TBN to the pixel shader
+
+```hlsl
+struct FVertexFactoryInterpolantsVSToPS
+{
+#if NUM_TEX_COORD_INTERPOLATORS
+	float4 TexCoords[(NUM_TEX_COORD_INTERPOLATORS + 1) / 2] : TEXCOORD0;
+#endif
+	float4 VertexColor : COLOR0;
+	// Packed like LocalVertexFactory: tangent.xyz + normal.xyz + mirror sign
+	half4 TangentToWorld0 : TEXCOORD4; // xyz = tangent
+	half4 TangentToWorld2 : TEXCOORD5; // xyz = normal, w = sign
+#if INSTANCED_STEREO
+	nointerpolation uint EyeIndex : PACKED_EYE_INDEX;
+#endif
+};
+```
+
+### 4) `GetMaterialVertexParameters` — full `TangentToWorld`
+
+```hlsl
+FMaterialVertexParameters GetMaterialVertexParameters(
+	FVertexFactoryInput Input,
+	FVertexFactoryIntermediates Intermediates,
+	float3 WorldPosition,
+	half3x3 TangentToLocal)
+{
+	FMaterialVertexParameters Result = (FMaterialVertexParameters)0;
+
+	Result.SceneData = Intermediates.SceneData;
+	Result.WorldPosition = WorldPosition;
+	Result.TangentToWorld = Intermediates.TangentToWorld; // full TBN, not only [2]
+	Result.PreSkinnedPosition = WorldPosition;
+	Result.PreSkinnedNormal = Intermediates.TangentToWorld[2];
+	Result.VertexColor = Intermediates.VertexColor;
+
+#if NUM_MATERIAL_TEXCOORDS_VERTEX
+	UNROLL
+	for (int CoordinateIndex = 0; CoordinateIndex < NUM_MATERIAL_TEXCOORDS_VERTEX; CoordinateIndex++)
+	{
+		Result.TexCoords[CoordinateIndex] = Intermediates.LocalUV;
+	}
+#endif
+	return Result;
+}
+```
+
+### 5) `VertexFactoryGetWorldNormal` / `GetTangentToLocal`
+
+```hlsl
+float3 VertexFactoryGetWorldNormal(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates)
+{
+	return Intermediates.TangentToWorld[2];
+}
+
+half3x3 VertexFactoryGetTangentToLocal(FVertexFactoryInput Input, FVertexFactoryIntermediates Intermediates)
+{
+	float3 N = Intermediates.LocalNormal;
+	float3 Up = (abs(N.z) < 0.999f) ? float3(0, 0, 1) : float3(1, 0, 0);
+	float3 T = normalize(cross(Up, N));
+	float3 B = cross(N, T);
+	return half3x3(T, B, N);
+}
+```
+
+### 6) `VertexFactoryGetInterpolantsVSToPS` — write tangents
+
+```hlsl
+FVertexFactoryInterpolantsVSToPS VertexFactoryGetInterpolantsVSToPS(
+	FVertexFactoryInput Input,
+	FVertexFactoryIntermediates Intermediates,
+	FMaterialVertexParameters VertexParameters)
+{
+	FVertexFactoryInterpolantsVSToPS Interpolants = (FVertexFactoryInterpolantsVSToPS)0;
+
+	Interpolants.VertexColor = Intermediates.VertexColor;
+
+	// Same packing LocalVF uses via SetTangents(...)
+	Interpolants.TangentToWorld0 = half4(Intermediates.TangentToWorld[0], 0);
+	Interpolants.TangentToWorld2 = half4(Intermediates.TangentToWorld[2], Intermediates.TangentToWorldSign);
+
+#if NUM_TEX_COORD_INTERPOLATORS
+	float2 CustomizedUVs[NUM_TEX_COORD_INTERPOLATORS];
+	GetMaterialCustomizedUVs(VertexParameters, CustomizedUVs);
+	GetCustomInterpolators(VertexParameters, CustomizedUVs);
+	UNROLL
+	for (int CoordIdx = 0; CoordIdx < NUM_TEX_COORD_INTERPOLATORS; CoordIdx++)
+		SetUV(Interpolants, CoordIdx, CustomizedUVs[CoordIdx]);
+#endif
+
+	return Interpolants;
+}
+```
+
+Or, if `SetTangents` / `SetColor` resolve against your struct members:
+
+```hlsl
+SetTangents(Interpolants, Intermediates.TangentToWorld[0], Intermediates.TangentToWorld[2], Intermediates.TangentToWorldSign);
+SetColor(Interpolants, Intermediates.VertexColor);
+```
+
+### 7) `GetMaterialPixelParameters` — assemble TBN for the material
+
+```hlsl
+FMaterialPixelParameters GetMaterialPixelParameters(FVertexFactoryInterpolantsVSToPS Interpolants, float4 SvPosition)
+{
+	FMaterialPixelParameters Result = MakeInitializedMaterialPixelParameters();
+
+#if NUM_TEX_COORD_INTERPOLATORS
+	UNROLL
+	for (uint CoordinateIndex = 0; CoordinateIndex < NUM_TEX_COORD_INTERPOLATORS; CoordinateIndex++)
+	{
+		Result.TexCoords[CoordinateIndex] = GetUV(Interpolants, CoordinateIndex);
+	}
+#endif
+
+	Result.VertexColor = Interpolants.VertexColor;
+
+	half3 TangentToWorld0 = Interpolants.TangentToWorld0.xyz;
+	half4 TangentToWorld2 = Interpolants.TangentToWorld2;
+	Result.UnMirrored = TangentToWorld2.w;
+	Result.TangentToWorld = AssembleTangentToWorld(TangentToWorld0, TangentToWorld2);
+
+	Result.TwoSidedSign = 1; // was 0 — that kills lighting
+	Result.PrimitiveId = GetPrimitiveId(Interpolants);
+
+	return Result;
+}
+```
+
+---
+
+**After recompile shaders:** Lit view should show N·L on the facets; Buffer Viz → World Normal should show colors (not flat black). Leave material Normal unconnected; Vertex Color → Base Color is fine.
+
+If it still won’t compile on `LWCToFloat3x3` / `InvNonUniformScaleAndDeterminantSign`, say so and we can match the exact 5.3 helper names in your Engine shaders. I can also apply this patch in the `.ush` if you want.
+
+
+---
+
+
+**Likely cause:** `bHiddenInEditor` on the scene proxy is **never initialized**, then used to hide the mesh in the **editor** viewport.
+
+### Why it matches eject
+
+**File:** `IndirectInstancingSceneProxy.cpp`
+
+Constructor (~248) never sets `bHiddenInEditor`.  
+`GetViewRelevance` (~317–320):
+
+```cpp
+const bool bIsHiddenInEditor = bHiddenInEditor && View->Family->EngineShowFlags.Editor;
+Result.bDrawRelevance = bValid && IsShown(View) && !bIsHiddenInEditor;
+```
+
+| Mode | `EngineShowFlags.Editor` | Effect if `bHiddenInEditor` is garbage/`true` |
+|------|--------------------------|-----------------------------------------------|
+| PIE / game | false | Mesh **drawn** |
+| Editor after eject | true | Mesh **hidden** |
+
+`Mobility = Movable` (and other dirtying) recreates the proxy more often → more chance you hit a “true” garbage value after eject.
+
+---
+
+### Proposed fix (chat only — do not apply)
+
+**File:** `Plugins/DelaunatorPlugin/Source/IndirectInstancingCore/Private/IndirectInstancingSceneProxy.cpp`  
+**In** `FGeoVoronoiIndirectInstancingSceneProxy::FGeoVoronoiIndirectInstancingSceneProxy` **(~254, after `RegisterExtension`)**
+
+```cpp
+// Must init: used in GetViewRelevance with EngineShowFlags.Editor.
+// Uninitialized true → invisible in editor, visible in PIE.
+bHiddenInEditor = false;
+```
+
+Optional safer header default:
+
+**File:** `Plugins/DelaunatorPlugin/Source/IndirectInstancingCore/Private/IndirectInstancingSceneProxy.h` **~line 54**
+
+```cpp
+bool bHiddenInEditor = false;
+```
+
+---
+
+### Quick confirm
+
+After eject, log in `GetViewRelevance`:
+
+```cpp
+UE_LOG(LogTemp, Warning, TEXT("GetViewRelevance: bHiddenInEditor=%d EditorFlags=%d bValid=%d"),
+	bHiddenInEditor ? 1 : 0,
+	View->Family->EngineShowFlags.Editor ? 1 : 0,
+	bValid ? 1 : 0);
+```
+
+If you see `bHiddenInEditor=1` + `EditorFlags=1` → this is the bug.  
+If `bValid=0` → different issue (`CBTResources` / `IsGPUReady()`), say so and we chase that next.
+
+
+
+---
+
+
+
+Your friend’s note is about **two different UE shadow systems**, and how hard they are with a **custom indirect** mesh like yours (or his).
+
+### CSM (Cascaded Shadow Maps) — what he got working
+
+- Classic directional-light shadows: a few depth maps near the camera (cascades).
+- Works with normal mesh draws: if your indirect path submits geometry into the **shadow depth pass** (with valid positions / instance buffers), CSM can use it.
+- Good enough for “mountains cast on valleys” in that screenshot.
+- Limits: detail falls off with distance; big planets need large **Dynamic Shadow Distance** and still look soft/aliased far away.
+
+So: **CSM = easier path for custom/indirect renderers.** That’s the realistic target for your Voronoi planet first.
+
+### VSM (Virtual Shadow Maps) — what he struggled with
+
+- UE5’s high-res virtualized shadow atlas (page table, many small pages, clipped per light).
+- Built around **GPU Scene**: engine wants primitives/instances registered in GPU Scene so VSM can cull, page, and cache shadows efficiently.
+- Your (and his) path often **bypasses** that: `PrimID_ForceZero`, custom instance buffer, VF that isn’t a normal GPU-Scene mesh → VSM doesn’t “just work.”
+- Getting it once meant hacking GPU Scene + VSM hooks for that one mesh type → fragile, expensive, and he only ever got **one planet** stable.
+
+**“Super slow”:** VSM updates lots of pages when a huge deformed/indirect surface moves or the camera orbits; one planet already hurts; many planets = worse.
+
+**“LOD were quite low”:** fewer triangles → fewer shadow pages invalidated → looked OK in that old shot; better LOD later = more cost / more VSM pain.
+
+### One-line summary
+
+| | CSM | VSM |
+|---|-----|-----|
+| With custom indirect | Achievable (submit to shadow depth) | Needs GPU Scene integration; hard + costly |
+| His status | Working | Tried once, painful, 1 planet, not kept |
+
+### For you
+
+The shading you have now is **lit GBuffer (N·L)**. Real **self-shadows** like that screenshot need the planet in the **shadow map** — start with **CSM** (same problem space as his “got CSM working”). Treat VSM as a later, separate project (GPU Scene + caching), not a requirement for cliff shadows.
+
+
+
+---
+
+
+
+### GPU Scene
+
+UE’s **GPU-side registry of what to draw**: transforms, bounds, instance data, etc., living in GPU buffers the renderer culls and draws from (Nanite, VSM, mesh draws, etc.).
+
+Normal static/skeletal meshes are registered there automatically. Your planet mostly **skips** that path: you build your own `InstanceBuffer`, force `PrimID_ForceZero`, and draw indirect from custom cull. That’s why VSM (which leans on GPU Scene) is hard, while a custom BasePass + CSM can still work.
+
+---
+
+### Your shading type
+
+**Default Lit + deferred** (your `Planet_MM` is Surface / Default Lit / Opaque).
+
+Flow:
+1. Vertex factory writes position + **world normal** (TBN fix) + base color (vertex color).
+2. BasePass packs that into the **GBuffer**.
+3. **Deferred lighting** applies UE lights using that GBuffer.
+
+You are **not** Unlit, and **not** doing custom lit SceneColor in the material.
+
+---
+
+### GBuffer N·L
+
+**GBuffer** = screen textures from the geometry pass: base color, world normal, roughness, depth, …
+
+**N·L** = `saturate(dot(Normal, LightDirection))` — how much a surface faces the light (Lambertian diffuse).
+
+So “GBuffer N·L” means: lighting uses the **normal you stored in the GBuffer**, dotted with the light. That’s the bright/dark hemisphere you see. It is **shading**, not **shadows** (shadows need a shadow map / contact shadow on top of N·L).
+
+
+---
+
+
+## USEFUL THINGS
+
+### get from which triangle a screen pixel is from
+Easiest with my setup: each draw instance **is** one triangle (`SV_InstanceID` → `QuadRenderInstance`).
+
+**Do this:** in a pass (or BasePass extra RT), write an ID per pixel, e.g.:
+
+```text
+uint TriangleId = InstanceId;           // or pack SiteId | corner index
+// optional: Voronoi SiteId from InstanceBuffer[InstanceId].SiteId
+```
+
+Store in a **`R32_UINT` (or RG32) ID texture** same size as the view. Then for any screen pixel: read ID → that planet triangle (and site).
+
+You already have `InstanceId` in the VF; you don’t get this “for free” from SceneColor — you must **output** it. Depth alone isn’t enough to recover the triangle without an ID or heavy reconstruction.
+
+
+---
+
+
+## find the screen pixel position on it's triangle
+
+**Unproject** = turn “pixel on screen + depth” back into a 3D point.
+
+### Idea
+
+1. Pixel `(x, y)` → **NDC** (clip-ish coords in \([-1,1]\) or UE’s convention)  
+2. Pair with **depth** from the depth buffer  
+3. Multiply by the **inverse view-projection** matrix → world (or translated world)
+
+### HLSL-style (conceptual)
+
+```hlsl
+// uv in [0,1], origin usually top-left in textures
+float2 uv = (float2(pixelX, pixelY) + 0.5) / float2(ScreenWidth, ScreenHeight);
+
+// depth from SceneDepth / custom depth RT (0..1 or device depth — match how it was stored)
+float depth = DepthTexture.Sample(sam, uv).r;
+
+// NDC: flip Y if your UV is top-left and clip is bottom-left
+float2 ndcXY = uv * 2.0 - 1.0;
+ndcXY.y *= -1.0;  // often needed in D3D
+
+float4 clipPos = float4(ndcXY, depth, 1.0);
+
+// InvViewProj: View.ViewMatrices inverse, or UE ResolvedView helpers
+float4 worldH = mul(clipPos, InvViewProjectionMatrix);
+float3 P = worldH.xyz / worldH.w;  // world position
+```
+
+In UE you often use existing helpers (`SvPositionTo*`, `GetWorldPosition*`, `ScreenToWorld`, etc.) that do this with the **View** uniform buffer — same math under the hood.
+
+### What you need
+
+| Input | Source |
+|--------|--------|
+| `pixelX, pixelY` | screen / compute thread |
+| `depth` | depth texture at that pixel |
+| `InvViewProjection` | camera for that frame |
+
+Without depth you only get a **ray**, not a point on the planet. With depth you get **P** on the surface, then barycentrics with `V0,V1,V2`.

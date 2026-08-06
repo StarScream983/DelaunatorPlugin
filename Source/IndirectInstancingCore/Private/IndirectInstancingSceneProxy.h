@@ -51,7 +51,7 @@ private:
 	void BuildOcclusionVolumes(TArrayView<FVector2D> const& InMinMaxData, FIntPoint const& InMinMaxSize, TArrayView<int32> const& InMinMaxMips, int32 InNumLods);
 
 public:
-	bool bHiddenInEditor;
+	bool bHiddenInEditor = false;
 
 	class FMaterialRenderProxy* Material;
 	FMaterialRelevance MaterialRelevance;

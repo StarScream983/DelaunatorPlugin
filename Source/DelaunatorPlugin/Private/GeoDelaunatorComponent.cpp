@@ -33,7 +33,8 @@ UGeoDelaunatorComponent::UGeoDelaunatorComponent(const FObjectInitializer& Objec
 	PrimaryComponentTick.bCanEverTick = true;
 
 	CastShadow = true;
-	bCastContactShadow = false;
+	// Contact shadows help short-range self-shadowing of elevation cliffs (CSM/VSM often miss them).
+	bCastContactShadow = true;
 	bUseAsOccluder = true;
 	bAffectDynamicIndirectLighting = false;
 	bAffectDistanceFieldLighting = false;
@@ -41,7 +42,8 @@ UGeoDelaunatorComponent::UGeoDelaunatorComponent(const FObjectInitializer& Objec
 #if WITH_EDITORONLY_DATA
 	bEnableAutoLODGeneration = false;
 #endif
-	Mobility = EComponentMobility::Static;
+	// GPU-rebuilt indirect mesh must be Movable or dynamic shadow maps often skip / cache-stale it.
+	Mobility = EComponentMobility::Movable;
 
 	SyncPlanetColorDebugToRenderThread();
 }
@@ -2336,8 +2338,8 @@ void UGeoDelaunatorComponent::AssignElevations()
 				// exponent 1.0 = linear, 2.0 = quadratic, 3.0+ = sharp peak
 
 				// INVERSE SQUARE — fast near boundary, very long tail
-				// const double k = 0.3;
-				// double DistanceFactor = 1.0 / (1.0 + (double)(NewDist * NewDist) * k);
+				//const double k = 0.8;
+				//double DistanceFactor = 1.0 / (1.0 + (double)(NewDist * NewDist) * k);
 
 				DistanceToBoundary[NeighborSite] = NewDist;
 				NearestBoundaryElevation[NeighborSite] = NearestElev;

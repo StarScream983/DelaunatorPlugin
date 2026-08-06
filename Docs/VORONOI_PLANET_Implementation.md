@@ -1044,3 +1044,41 @@ Architectural patterns for combining P&V with Voronoi terrain systems
 Techniques for procedural terrain smoothing beyond spline tension
 
 Handling terrain transition zones in voronoi-based mesh generation
+
+
+
+---
+
+
+
+**Short answer:** With the **current** renderer, yes — depth comes from the normal UE mesh path, not from custom depth shader code.
+
+## Current path (`FMeshBatch` + VF + material)
+
+In `IndirectInstancingSceneProxy.cpp` the planet is submitted as a normal mesh:
+
+```369:373:Plugins/DelaunatorPlugin/Source/IndirectInstancingCore/Private/IndirectInstancingSceneProxy.cpp
+		Mesh.DepthPriorityGroup = SDPG_World;
+		Mesh.bUseForMaterial = true;
+		Mesh.CastShadow = true;
+		Mesh.bUseForDepthPass = true;
+```
+
+So:
+
+- **Base pass** — UE rasterizes your displaced vertices and the material pipeline writes **SceneDepth** from clip-space Z (default depth write).
+- **Shadow depth pass** — `bUseForDepthPass = true` includes the mesh in depth-only shadow draws.
+
+The VF only moves vertices in the VS (`Radius = PlanetRadius * (1 + Elev * …)`). There is **no** `SV_Depth` override and **no** per-pixel depth offset in your `.ush` files. Depth is **vertex-interpolated** surface depth.
+
+## What you are *not* doing
+
+- No custom depth output in a global PS
+- No per-pixel height → modified depth (MaterialFree doc describes that as future work)
+- The **MaterialFree / SceneViewExtension** path from `MaterialFree_Planet_Renderer.md` is **not** implemented — that would need you to explicitly bind a depth target and set depth state
+
+## Caveat
+
+There’s a note in `IndirectInstancingSceneProxy.h` that `GetMeshShaderMap` can be **nullptr during the DepthPass**, so **shadow-depth** for this mesh may be unreliable even though main-view depth usually works.
+
+**Bottom line:** Main camera depth — yes, via standard UE mesh rasterization. Custom depth buffer logic — no. Per-pixel depth — no, only VS elevation.

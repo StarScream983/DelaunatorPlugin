@@ -252,6 +252,9 @@ FGeoVoronoiIndirectInstancingSceneProxy::FGeoVoronoiIndirectInstancingSceneProxy
 		InComponent->GetCBTResources().IsValid() ? 1 : 0);
 
 	GeoVoronoiIndirectInstancingRendererExtension.RegisterExtension();
+	// Must init: used in GetViewRelevance with EngineShowFlags.Editor.
+	// Uninitialized true → invisible in editor, visible in PIE.
+	bHiddenInEditor = false;
 	bHasDeformableMesh = false;
 	PlanetRadius = InComponent->GetPlanetRadius();
 
@@ -1052,17 +1055,26 @@ void FGeoVoronoiIndirectInstancingRendererExtension::SubmitWork(FRDGBuilder& Gra
 			{
 				FSceneView const* CullView = CullViews[WorkDescs[WorkIndex].CullViewIndex];
 
-				GeoVoronoiIndirectInstancingMesh::FViewData CullViewData;
-				GeoVoronoiIndirectInstancingMesh::GetViewData(CullView, CullViewData);
+				//GeoVoronoiIndirectInstancingMesh::FViewData CullViewData;
+				//GeoVoronoiIndirectInstancingMesh::GetViewData(CullView, CullViewData);
+				// Shadow views pass a dedicated cull frustum (VHM / ExampleIndirectInstancing pattern).
+				// Using the camera ViewFrustum here mis-culls shadow-depth work.
+				FConvexVolume const* ShadowFrustum = CullView->GetDynamicMeshElementsShadowCullFrustum();
+				FConvexVolume const& CullFrustum =
+					(ShadowFrustum != nullptr && ShadowFrustum->Planes.Num() > 0)
+						? *ShadowFrustum
+						: CullView->ViewFrustum;
 
 				GeoVoronoiIndirectInstancingMesh::FChildViewDesc ChildViewDesc;
 				ChildViewDesc.ViewDebug = CullView;
 				ChildViewDesc.bIsMainView = (CullView == MainView);
 
-				const int32 NumCullPlanes = FMath::Min(CullViewData.ViewFrustum.Planes.Num(), 5);
+				//const int32 NumCullPlanes = FMath::Min(CullViewData.ViewFrustum.Planes.Num(), 5);
+				const int32 NumCullPlanes = FMath::Min(CullFrustum.Planes.Num(), 5);
 				for (int32 PlaneIndex = 0; PlaneIndex < NumCullPlanes; ++PlaneIndex)
 				{
-					const FPlane& Plane = CullViewData.ViewFrustum.Planes[PlaneIndex];
+					//const FPlane& Plane = CullViewData.ViewFrustum.Planes[PlaneIndex];
+					const FPlane& Plane = CullFrustum.Planes[PlaneIndex];
 					ChildViewDesc.Planes[PlaneIndex] = FVector4(Plane.X, Plane.Y, Plane.Z, Plane.W);
 				}
 
