@@ -2456,6 +2456,88 @@ void UGeoDelaunatorComponent::TryRegisterLandOceanBoundary(int32 SiteA, int32 Si
 	}
 }
 
+namespace GeoDelaunatorMinecraftCurveBake
+{
+	static float EvalRuntimeCurve(float X, const FRuntimeFloatCurve& Curve)
+	{
+		const FRichCurve* RichCurve = Curve.GetRichCurveConst();
+		if (RichCurve == nullptr || RichCurve->IsEmpty())
+		{
+			return 0.0f;
+		}
+		return RichCurve->Eval(X);
+	}
+
+	static void BakeRuntimeCurveLUT(
+		const FRuntimeFloatCurve& Curve,
+		int32 Resolution,
+		float AxisMin,
+		float AxisMax,
+		TArray<float>& OutLUT)
+	{
+		Resolution = FMath::Max(Resolution, 2);
+		OutLUT.SetNumUninitialized(Resolution);
+
+		const float AxisSpan = AxisMax - AxisMin;
+		for (int32 i = 0; i < Resolution; ++i)
+		{
+			const float Alpha = static_cast<float>(i) / static_cast<float>(Resolution - 1);
+			const float X = (FMath::Abs(AxisSpan) > KINDA_SMALL_NUMBER)
+				? FMath::Lerp(AxisMin, AxisMax, Alpha)
+				: AxisMin;
+			OutLUT[i] = EvalRuntimeCurve(X, Curve);
+		}
+	}
+}
+
+void UGeoDelaunatorComponent::BakeAllMinecraftTerrainCurveLUTs()
+{
+	using namespace GeoDelaunatorMinecraftCurveBake;
+
+	BakeRuntimeCurveLUT(
+		MN_ContinentalnessSpline,
+		TerrainCurveLUTResolution,
+		TerrainCurveAxisMin,
+		TerrainCurveAxisMax,
+		ContinentalnessCurveLUT);
+
+	BakeRuntimeCurveLUT(
+		MN_ErosionSpline,
+		TerrainCurveLUTResolution,
+		TerrainCurveAxisMin,
+		TerrainCurveAxisMax,
+		ErosionCurveLUT);
+
+	BakeRuntimeCurveLUT(
+		MN_PeaksValleysSpline,
+		TerrainCurveLUTResolution,
+		TerrainCurveAxisMin,
+		TerrainCurveAxisMax,
+		PeaksValleysCurveLUT);
+}
+
+float UGeoDelaunatorComponent::SampleMinecraftCurveLUT(float X, const TArray<float>& LUT) const
+{
+	if (LUT.Num() < 2)
+	{
+		return 0.0f;
+	}
+
+	const float AxisSpan = TerrainCurveAxisMax - TerrainCurveAxisMin;
+	float U = 0.0f;
+	if (FMath::Abs(AxisSpan) > KINDA_SMALL_NUMBER)
+	{
+		U = FMath::Clamp((X - TerrainCurveAxisMin) / AxisSpan, 0.0f, 1.0f);
+	}
+
+	const float F = U * static_cast<float>(LUT.Num() - 1);
+	const int32 I0 = FMath::Clamp(FMath::FloorToInt(F), 0, LUT.Num() - 1);
+	const int32 I1 = FMath::Min(I0 + 1, LUT.Num() - 1);
+	const float T = F - static_cast<float>(I0);
+
+	return FMath::Lerp(LUT[I0], LUT[I1], T);
+}
+
 // DEPRECATED but kept for reference
 // i need to find where to incorporate
 void UGeoDelaunatorComponent::BuildErosionControlPerSite()
@@ -2615,6 +2697,16 @@ void UGeoDelaunatorComponent::BuildTerrainSurfaceFields()
 				0.75f * LocalShape01 + 0.25f * ElevBias,
 				-1.0f,
 				1.0f);
+		}
+
+		// CONTINENTALNESS HERE
+		if(CurrentElevation >= 0.0f)
+		{
+			const float Continentalness = SampleMinecraftCurveLUT(CurrentElevation, ContinentalnessCurveLUT);
+		}
+		else
+		{
+			LocalProvincePerSite[CurrentSite] = 0.0f;
 		}
 	}
 	

@@ -1,0 +1,206 @@
+// PlanetNoise.h — header-only 3D noise (Perlin, Simplex, FBm, domain warp)
+#pragma once
+
+#include "CoreMinimal.h"
+
+namespace PlanetNoise
+{
+	/** Quintic fade: 6t^5 - 15t^4 + 10t^3 */
+	FORCEINLINE float Fade(float T)
+	{
+		return T * T * T * (T * (T * 6.f - 15.f) + 10.f);
+	}
+
+	FORCEINLINE float GradDot(int32 Hash, float X, float Y, float Z)
+	{
+		// 12 cube-edge directions (Perlin)
+		switch (Hash & 15)
+		{
+		case  0: return  X + Y;
+		case  1: return -X + Y;
+		case  2: return  X - Y;
+		case  3: return -X - Y;
+		case  4: return  X + Z;
+		case  5: return -X + Z;
+		case  6: return  X - Z;
+		case  7: return -X - Z;
+		case  8: return  Y + Z;
+		case  9: return -Y + Z;
+		case 10: return  Y - Z;
+		case 11: return -Y - Z;
+		case 12: return  X + Y;
+		case 13: return -X + Y;
+		case 14: return -Y + Z;
+		default: return  Y - Z;
+		}
+	}
+
+	FORCEINLINE int32 Hash3(int32 X, int32 Y, int32 Z, int32 Seed)
+	{
+		int32 H = Seed;
+		H ^= X * 374761393;
+		H ^= Y * 668265263;
+		H ^= Z * 2147483647;
+		H = (H ^ (H >> 13)) * 1274126177;
+		return H ^ (H >> 16);
+	}
+
+	/** Classic Perlin (gradient noise on a cubic lattice). ≈ [-1, 1] */
+	inline float Perlin3D(float X, float Y, float Z, int32 Seed = 1337)
+	{
+		const int32 Xi = FMath::FloorToInt(X);
+		const int32 Yi = FMath::FloorToInt(Y);
+		const int32 Zi = FMath::FloorToInt(Z);
+		const float Xf = X - Xi;
+		const float Yf = Y - Yi;
+		const float Zf = Z - Zi;
+		const float U = Fade(Xf);
+		const float V = Fade(Yf);
+		const float W = Fade(Zf);
+
+		const float N000 = GradDot(Hash3(Xi,     Yi,     Zi,     Seed), Xf,       Yf,       Zf);
+		const float N001 = GradDot(Hash3(Xi,     Yi,     Zi + 1, Seed), Xf,       Yf,       Zf - 1.f);
+		const float N010 = GradDot(Hash3(Xi,     Yi + 1, Zi,     Seed), Xf,       Yf - 1.f, Zf);
+		const float N011 = GradDot(Hash3(Xi,     Yi + 1, Zi + 1, Seed), Xf,       Yf - 1.f, Zf - 1.f);
+		const float N100 = GradDot(Hash3(Xi + 1, Yi,     Zi,     Seed), Xf - 1.f, Yf,       Zf);
+		const float N101 = GradDot(Hash3(Xi + 1, Yi,     Zi + 1, Seed), Xf - 1.f, Yf,       Zf - 1.f);
+		const float N110 = GradDot(Hash3(Xi + 1, Yi + 1, Zi,     Seed), Xf - 1.f, Yf - 1.f, Zf);
+		const float N111 = GradDot(Hash3(Xi + 1, Yi + 1, Zi + 1, Seed), Xf - 1.f, Yf - 1.f, Zf - 1.f);
+
+		const float X00 = FMath::Lerp(N000, N100, U);
+		const float X01 = FMath::Lerp(N001, N101, U);
+		const float X10 = FMath::Lerp(N010, N110, U);
+		const float X11 = FMath::Lerp(N011, N111, U);
+		const float Y0  = FMath::Lerp(X00, X10, V);
+		const float Y1  = FMath::Lerp(X01, X11, V);
+		return FMath::Lerp(Y0, Y1, W);
+	}
+
+	/** 3D simplex (skewed lattice). ≈ [-1, 1] */
+	inline float Simplex3D(float X, float Y, float Z, int32 Seed = 1337)
+	{
+		constexpr float F3 = 1.f / 3.f;
+		constexpr float G3 = 1.f / 6.f;
+
+		const float S = (X + Y + Z) * F3;
+		const int32 I = FMath::FloorToInt(X + S);
+		const int32 J = FMath::FloorToInt(Y + S);
+		const int32 K = FMath::FloorToInt(Z + S);
+
+		const float T = (I + J + K) * G3;
+		const float X0 = X - (I - T);
+		const float Y0 = Y - (J - T);
+		const float Z0 = Z - (K - T);
+
+		int32 I1, J1, K1, I2, J2, K2;
+		if (X0 >= Y0)
+		{
+			if (Y0 >= Z0)      { I1 = 1; J1 = 0; K1 = 0; I2 = 1; J2 = 1; K2 = 0; }
+			else if (X0 >= Z0) { I1 = 1; J1 = 0; K1 = 0; I2 = 1; J2 = 0; K2 = 1; }
+			else               { I1 = 0; J1 = 0; K1 = 1; I2 = 1; J2 = 0; K2 = 1; }
+		}
+		else
+		{
+			if (Y0 < Z0)       { I1 = 0; J1 = 0; K1 = 1; I2 = 0; J2 = 1; K2 = 1; }
+			else if (X0 < Z0)  { I1 = 0; J1 = 1; K1 = 0; I2 = 0; J2 = 1; K2 = 1; }
+			else               { I1 = 0; J1 = 1; K1 = 0; I2 = 1; J2 = 1; K2 = 0; }
+		}
+
+		const float X1 = X0 - I1 + G3;
+		const float Y1 = Y0 - J1 + G3;
+		const float Z1 = Z0 - K1 + G3;
+		const float X2 = X0 - I2 + 2.f * G3;
+		const float Y2 = Y0 - J2 + 2.f * G3;
+		const float Z2 = Z0 - K2 + 2.f * G3;
+		const float X3 = X0 - 1.f + 3.f * G3;
+		const float Y3 = Y0 - 1.f + 3.f * G3;
+		const float Z3 = Z0 - 1.f + 3.f * G3;
+
+		auto Corner = [&](int32 II, int32 JJ, int32 KK, float Xx, float Yy, float Zz) -> float
+		{
+			float T0 = 0.6f - Xx * Xx - Yy * Yy - Zz * Zz;
+			if (T0 < 0.f)
+			{
+				return 0.f;
+			}
+			T0 *= T0;
+			return T0 * T0 * GradDot(Hash3(II, JJ, KK, Seed), Xx, Yy, Zz);
+		};
+
+		float N = 0.f;
+		N += Corner(I,      J,      K,      X0, Y0, Z0);
+		N += Corner(I + I1, J + J1, K + K1, X1, Y1, Z1);
+		N += Corner(I + I2, J + J2, K + K2, X2, Y2, Z2);
+		N += Corner(I + 1,  J + 1,  K + 1,  X3, Y3, Z3);
+		return 32.f * N; // scale toward ~[-1,1]
+	}
+
+	/** Alias: Perlin/Simplex are both gradient noise. */
+	FORCEINLINE float Gradient3D(float X, float Y, float Z, int32 Seed = 1337)
+	{
+		return Perlin3D(X, Y, Z, Seed);
+	}
+
+	enum class EBase : uint8 { Perlin, Simplex };
+
+	FORCEINLINE float Sample(EBase Base, float X, float Y, float Z, int32 Seed)
+	{
+		return (Base == EBase::Simplex)
+			? Simplex3D(X, Y, Z, Seed)
+			: Perlin3D(X, Y, Z, Seed);
+	}
+
+	/** Fractional Brownian motion. */
+	inline float FBm(
+		float X, float Y, float Z,
+		int32 Octaves = 5,
+		float Lacunarity = 2.f,
+		float Gain = 0.5f,
+		EBase Base = EBase::Simplex,
+		int32 Seed = 1337)
+	{
+		float Sum = 0.f;
+		float Amp = 1.f;
+		float Freq = 1.f;
+		float Norm = 0.f;
+		for (int32 O = 0; O < Octaves; ++O)
+		{
+			Sum += Amp * Sample(Base, X * Freq, Y * Freq, Z * Freq, Seed + O * 1013);
+			Norm += Amp;
+			Freq *= Lacunarity;
+			Amp *= Gain;
+		}
+		return Norm > KINDA_SMALL_NUMBER ? (Sum / Norm) : 0.f;
+	}
+
+	/**
+	 * Domain warp: offset (X,Y,Z) by noise, then sample.
+	 * Amplitude is in the same units as the input coords.
+	 */
+	inline float Warp(
+		float X, float Y, float Z,
+		float Amplitude = 1.f,
+		float WarpFreq = 1.f,
+		EBase Base = EBase::Simplex,
+		int32 Seed = 1337)
+	{
+		const float Wx = Sample(Base, X * WarpFreq,        Y * WarpFreq,        Z * WarpFreq,        Seed);
+		const float Wy = Sample(Base, X * WarpFreq + 5.2f, Y * WarpFreq + 1.3f, Z * WarpFreq + 2.8f, Seed + 17);
+		const float Wz = Sample(Base, X * WarpFreq + 9.3f, Y * WarpFreq + 7.8f, Z * WarpFreq + 4.1f, Seed + 31);
+		return Sample(Base, X + Wx * Amplitude, Y + Wy * Amplitude, Z + Wz * Amplitude, Seed + 53);
+	}
+
+	/** Warp coords only (for FBm(WarpedX, ...) yourself). */
+	inline void WarpPoint(
+		float& X, float& Y, float& Z,
+		float Amplitude = 1.f,
+		float WarpFreq = 1.f,
+		EBase Base = EBase::Simplex,
+		int32 Seed = 1337)
+	{
+		const float Ox = X, Oy = Y, Oz = Z;
+		X = Ox + Amplitude * Sample(Base, Ox * WarpFreq,        Oy * WarpFreq,        Oz * WarpFreq,        Seed);
+		Y = Oy + Amplitude * Sample(Base, Ox * WarpFreq + 5.2f, Oy * WarpFreq + 1.3f, Oz * WarpFreq + 2.8f, Seed + 17);
+		Z = Oz + Amplitude * Sample(Base, Ox * WarpFreq + 9.3f, Oy * WarpFreq + 7.8f, Oz * WarpFreq + 4.1f, Seed + 31);
+	}
+}

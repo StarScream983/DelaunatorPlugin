@@ -102,6 +102,8 @@ FVertexFactoryIntermediates GetVertexFactoryIntermediates(FVertexFactoryInput In
 	Intermediates.LocalNormal = LocalNormal;
 
 	// Red Blob heights are subtle vs plate floors; scale up so radial lift reads at game scale.
+	// ElevationScale is Max Elevation; it's ElevationScale * radius, 0.03 for testing, will swap to 0.0009 or 7 for real scale planet
+	// 0.0009 for 6400km is 5.76km, which is a reasonable max elevation for a planet.
 	const float ElevationScale = 0.03f;
 	const float Radius = GeoVoronoiIndirectInstancingParams.PlanetRadius * (1.0f + Elev * ElevationScale);
 	Intermediates.LocalPos = VertexPos * Radius;

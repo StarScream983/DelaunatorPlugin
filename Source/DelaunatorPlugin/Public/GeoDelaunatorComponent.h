@@ -14,6 +14,7 @@
 #include <functional>
 #include <array>
 #include "CBTStructs.h"
+#include "Curves/CurveFloat.h"
 #include "GeoDelaunatorComponent_Interface.h"
 #include "GeoDelaunatorComponent.generated.h"
 
@@ -608,6 +609,57 @@ protected:
 	TArray<float> SoilDepthPerSite;         // 0 = exposed bedrock / thin soil, 1 = deep soil / sediment.
 	TQueue<int32> LandOceanBoundaryQueue;   // Unique land-side coastline sites, filled while registering land/ocean boundaries.
 
+	// --- Minecraft terrain splines (editor curves → baked GPU LUTs) ---
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain",
+	meta = (ClampMin = "64", UIMin = "64", ClampMax = "4096", UIMax = "4096"))
+	int32 TerrainCurveLUTResolution = 500;
+
+	/** Spline input domain baked to LUT (noise axis, usually continentalness / erosion / P&V). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain")
+	float TerrainCurveAxisMin = -1.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain")
+	float TerrainCurveAxisMax = 1.0f;
+
+	/** Highest land elevation after terrain build; set from C++ only. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain")
+	float MaxFinalLandElevation = 0.0f;
+
+	/** Deepest ocean floor elevation after terrain build; set from C++ only. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain")
+	float MinFinalOceanFloor = 0.0f;
+
+	/** Global scale on HF detail: MaxNoiseElevation * ErosionSpline(E) * detailNoise. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain", meta = (ClampMin = "0.0", UIMin = "0.0", ClampMax = "1.0", UIMax = "1.0"))
+	float MaxNoiseElevation = 0.05f;
+
+	// Bias high near sea level (hNorm ≈ 0), low at extremes
+	// float Bias = 1.0f - FMath::Clamp(hNorm / BiasRange, 0.0f, 1.0f);
+
+	/** Maps continentalness noise → base height offset. X = Time (axis), Y = ElevationPerSite units. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain")
+	FRuntimeFloatCurve MN_ContinentalnessSpline;
+
+	/** Maps erosion noise → detail amplitude. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain")
+	FRuntimeFloatCurve MN_ErosionSpline;
+
+	/** Maps peaks/valleys (weirdness) noise → shape bias offset. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Minecraft Terrain")
+	FRuntimeFloatCurve MN_PeaksValleysSpline;
+
+	/** Baked LUT samples from `MN_ContinentalnessSpline` (length = `TerrainCurveLUTResolution`). */
+	TArray<float> ContinentalnessCurveLUT;
+
+	/** Baked LUT samples from `MN_ErosionSpline`. */
+	TArray<float> ErosionCurveLUT;
+
+	/** Baked LUT samples from `MN_PeaksValleysSpline`. */
+	TArray<float> PeaksValleysCurveLUT;
+
+	// --- END Minecraft terrain splines ---
+
 	void GeneratePlates_RedBlobRandomFill();
 	void GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors, TArray<int32>& OutHalfEdgeIndices) const;
 	// add fisher-yates shuffle to randomize the order of neighbors and avoid similar plate IDs
@@ -644,6 +696,8 @@ protected:
 	void TryRegisterLandOceanBoundary(int32 SiteA, int32 SiteB, int32 HalfEdgeAB, TSet<uint64>& LandOceanBoundaryKeys);
 
 	// MINECRAFT TERRAIN STYLE FUNCTIONS
+	void BakeAllMinecraftTerrainCurveLUTs();
+	float SampleMinecraftCurveLUT(float X, const TArray<float>& LUT) const;
 	void BuildErosionControlPerSite();// DEPRECATED but kept for reference
 	void BuildErosionControlPerSite_Slope();
 	void BuildTerrainSurfaceFields();
@@ -657,19 +711,19 @@ protected:
 
 
 // New warp controls
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Warp")
 	float PlateWarpStrength = 0.25f;   // how far positions are displaced
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Warp")
 	float PlateWarpFrequency = 0.0002f; // scale relative to world units (planet radius ~500–6000)
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Warp")
 	int32 PlateWarpOctaves = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Warp")
 	float PlateWarpLacunarity = 2.0f;  // frequency multiplier per octave
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Plates")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Warp")
 	float PlateWarpGain = 0.5f;        // amplitude multiplier per octave
 
 	/*void GeneratePlates_NearestNeighbor();
