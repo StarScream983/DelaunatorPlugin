@@ -2702,11 +2702,12 @@ void UGeoDelaunatorComponent::BuildTerrainSurfaceFields()
 		// CONTINENTALNESS HERE
 		if(CurrentElevation >= 0.0f)
 		{
-			const float Continentalness = SampleMinecraftCurveLUT(CurrentElevation, ContinentalnessCurveLUT);
+			// LAND SITE
+			// const float Continentalness = SampleMinecraftCurveLUT(CurrentElevation, ContinentalnessCurveLUT);
 		}
 		else
 		{
-			LocalProvincePerSite[CurrentSite] = 0.0f;
+			// OCEAN SITE
 		}
 	}
 	
