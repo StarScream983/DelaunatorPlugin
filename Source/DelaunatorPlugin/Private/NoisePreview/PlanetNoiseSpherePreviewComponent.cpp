@@ -70,6 +70,20 @@ PlanetNoise::EBase UPlanetNoiseSpherePreviewComponent::ToBase(EPlanetNoiseBaseTy
 	}
 }
 
+int32 UPlanetNoiseSpherePreviewComponent::ResolutionToPixels(EPlanetNoiseCubeResolution Res)
+{
+	switch (Res)
+	{
+	case EPlanetNoiseCubeResolution::Res512:  return 512;
+	case EPlanetNoiseCubeResolution::Res1024: return 1024;
+	case EPlanetNoiseCubeResolution::Res2048: return 2048;
+	case EPlanetNoiseCubeResolution::Res4096: return 4096;
+	case EPlanetNoiseCubeResolution::Res8192: return 8192;
+	case EPlanetNoiseCubeResolution::Res256:
+	default:                                  return 256;
+	}
+}
+
 // Orbis CloudCoverageMap.usf GetCubeDirection — face order must stay consistent with UE TextureCube.
 FVector3f UPlanetNoiseSpherePreviewComponent::GetCubeDirection(int32 Face, float FaceU, float FaceV) const
 {
@@ -96,15 +110,29 @@ float UPlanetNoiseSpherePreviewComponent::SampleCoverage(const FVector3f& Surfac
 
 	if (bCoverageUseWarp)
 	{
-		PlanetNoise::WarpPointFractal(
-			Sx, Sy, Sz,
-			CoverageWarpStrength,
-			/*WarpFreq*/ 1.f,
-			CoverageWarpOctaves,
-			CoverageLacunarity,
-			CoverageGain,
-			CovBase,
-			CoverageSeed);
+		if (CoverageWarpStyle == EPlanetSphereWarpStyle::Iq)
+		{
+			PlanetNoise::WarpPositionIq3D(
+				Sx, Sy, Sz,
+				CoverageWarpStrength,
+				CoverageWarpOctaves,
+				CoverageLacunarity,
+				CoverageGain,
+				CovBase,
+				CoverageSeed);
+		}
+		else
+		{
+			PlanetNoise::WarpPointFractal(
+				Sx, Sy, Sz,
+				CoverageWarpStrength,
+				/*WarpFreq*/ 1.f,
+				CoverageWarpOctaves,
+				CoverageLacunarity,
+				CoverageGain,
+				CovBase,
+				CoverageSeed);
+		}
 	}
 
 	const float CoverageNoise = PlanetNoise::FBm(
@@ -226,8 +254,7 @@ void UPlanetNoiseSpherePreviewComponent::WriteFaceTexture(const TArray<FColor>& 
 
 void UPlanetNoiseSpherePreviewComponent::RegeneratePreview()
 {
-	const int32 Dim = FMath::Clamp(Resolution, 16, MaxResolution);
-	Resolution = Dim;
+	const int32 Dim = ResolutionToPixels(Resolution);
 
 	EnsureTextures(Dim);
 	if (!PreviewCube || !PreviewCube->GetPlatformData() || PreviewCube->GetPlatformData()->Mips.Num() == 0)
@@ -315,7 +342,7 @@ void UPlanetNoiseSpherePreviewComponent::ReleaseImGuiTexture()
 
 void UPlanetNoiseSpherePreviewComponent::ResetNoiseParamsToDefaults()
 {
-	Resolution = 256;
+	Resolution = EPlanetNoiseCubeResolution::Res256;
 	OuterRadius = 50.f;
 	CoverageNoiseScale = 4.f;
 	CoverageSeed = 1337;
@@ -326,6 +353,7 @@ void UPlanetNoiseSpherePreviewComponent::ResetNoiseParamsToDefaults()
 	CoverageLacunarity = 2.f;
 	CoverageGain = 0.5f;
 	bCoverageUseWarp = true;
+	CoverageWarpStyle = EPlanetSphereWarpStyle::Iq;
 	CoverageWarpStrength = 0.5f;
 	CoverageWarpOctaves = 6;
 	ImGuiFaceIndex = 4;
@@ -338,14 +366,23 @@ void UPlanetNoiseSpherePreviewComponent::DrawImGui()
 	const FString WindowTitle = FString::Printf(TEXT("Planet Noise Sphere##%s"), *GetName());
 	if (ImGui::Begin(TCHAR_TO_UTF8(*WindowTitle)))
 	{
-		ImGui::Text("%d^2 x 6 | %d samples | %.3f ms", Resolution, LastSampleCount, LastFillMs);
+		const int32 Dim = ResolutionToPixels(Resolution);
+		ImGui::Text("%d^2 x 6 | %d samples | %.3f ms", Dim, LastSampleCount, LastFillMs);
 
 		bool bParamsChanged = false;
 
 		ImGui::Separator();
 		ImGui::TextUnformatted("Output");
-		bParamsChanged |= ImGui::DragInt("Resolution", &Resolution, 1, 16, MaxResolution, "%d");
-		ImGui::SameLine(); ImGui::TextDisabled("(%d)", 256);
+		{
+			const char* ResLabels[] = { "256", "512", "1024", "2048", "4096", "8192" };
+			int32 ResIdx = static_cast<int32>(Resolution);
+			if (ImGui::Combo("Resolution", &ResIdx, ResLabels, UE_ARRAY_COUNT(ResLabels)))
+			{
+				Resolution = static_cast<EPlanetNoiseCubeResolution>(ResIdx);
+				bParamsChanged = true;
+			}
+			ImGui::SameLine(); ImGui::TextDisabled("(256)");
+		}
 		bParamsChanged |= ImGui::DragFloat("Outer Radius", &OuterRadius, 1.f, 1.f, 1.e9f, "%.1f");
 		ImGui::SameLine(); ImGui::TextDisabled("(%.1f)", 50.f);
 
@@ -372,22 +409,30 @@ void UPlanetNoiseSpherePreviewComponent::DrawImGui()
 		bParamsChanged |= ImGui::DragFloat("Coverage Lac", &CoverageLacunarity, 0.05f, 1.f, 4.f, "%.3f");
 		bParamsChanged |= ImGui::DragFloat("Coverage Gain", &CoverageGain, 0.01f, 0.05f, 0.95f, "%.3f");
 		bParamsChanged |= ImGui::Checkbox("Coverage Warp", &bCoverageUseWarp);
-		if (bCoverageUseWarp)
 		{
-			bParamsChanged |= ImGui::DragFloat("Warp Strength", &CoverageWarpStrength, 0.01f, 0.f, 8.f, "%.3f");
-			bParamsChanged |= ImGui::InputInt("Warp Octaves", &CoverageWarpOctaves);
+			bool bWarpParamsChanged = false;
+			const char* WarpLabels[] = { "Progressive", "IQ" };
+			int32 WarpIdx = static_cast<int32>(CoverageWarpStyle);
+			if (ImGui::Combo("Warp Style", &WarpIdx, WarpLabels, UE_ARRAY_COUNT(WarpLabels)))
+			{
+				CoverageWarpStyle = static_cast<EPlanetSphereWarpStyle>(WarpIdx);
+				bWarpParamsChanged = true;
+			}
+			ImGui::SameLine(); ImGui::TextDisabled("(IQ)");
+			bWarpParamsChanged |= ImGui::DragFloat("Warp Strength", &CoverageWarpStrength, 0.01f, 0.f, 8.f, "%.3f");
+			bWarpParamsChanged |= ImGui::InputInt("Warp Octaves", &CoverageWarpOctaves);
 			CoverageWarpOctaves = FMath::Clamp(CoverageWarpOctaves, 1, 16);
+			// Tweaking warp knobs only rebakes when warp is actually applied.
+			if (bCoverageUseWarp)
+			{
+				bParamsChanged |= bWarpParamsChanged;
+			}
 		}
 
 		ImGui::Separator();
 		bParamsChanged |= ImGui::SliderInt("ImGui Face", &ImGuiFaceIndex, 0, 5);
 		ImGui::SameLine(); ImGui::TextDisabled("(+Z=4)");
 
-		if (ImGui::Button("Draw", ImVec2(120.f, 0.f)))
-		{
-			bParamsChanged = true;
-		}
-		ImGui::SameLine();
 		if (ImGui::Button("Reset", ImVec2(120.f, 0.f)))
 		{
 			ResetNoiseParamsToDefaults();

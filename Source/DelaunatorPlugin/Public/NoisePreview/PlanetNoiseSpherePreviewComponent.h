@@ -8,6 +8,27 @@
 class UTexture2D;
 class UTextureCube;
 
+UENUM(BlueprintType)
+enum class EPlanetSphereWarpStyle : uint8
+{
+	/** FastNoise2-style progressive multi-displace. */
+	Progressive,
+	/** IQ / Orbis: f(p + h(p)) with h from 3 FBms. */
+	Iq
+};
+
+/** Per-face bake resolution for PreviewCube. */
+UENUM(BlueprintType)
+enum class EPlanetNoiseCubeResolution : uint8
+{
+	Res256  UMETA(DisplayName = "256"),
+	Res512  UMETA(DisplayName = "512"),
+	Res1024 UMETA(DisplayName = "1024"),
+	Res2048 UMETA(DisplayName = "2048"),
+	Res4096 UMETA(DisplayName = "4096"),
+	Res8192 UMETA(DisplayName = "8192"),
+};
+
 /** Fired after the coverage cube is filled (re-bind MID when Size recreates the asset). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPlanetNoiseSpherePreviewReady, UTextureCube*, Texture);
 
@@ -39,8 +60,8 @@ public:
 
 	// --- Output ---
 	/** Per-face resolution of the baked cube. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere", meta = (ClampMin = "16", ClampMax = "4096"))
-	int32 Resolution = 256;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere")
+	EPlanetNoiseCubeResolution Resolution = EPlanetNoiseCubeResolution::Res256;
 
 	/** Sphere radius used for Orbis-compatible position (cancels in Frequency * Radius). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere", meta = (ClampMin = "1.0"))
@@ -77,10 +98,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere|Coverage")
 	bool bCoverageUseWarp = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere|Coverage", meta = (ClampMin = "0.0", ClampMax = "8.0", EditCondition = "bCoverageUseWarp"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere|Coverage")
+	EPlanetSphereWarpStyle CoverageWarpStyle = EPlanetSphereWarpStyle::Iq;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere|Coverage", meta = (ClampMin = "0.0", ClampMax = "8.0"))
 	float CoverageWarpStrength = 0.5f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere|Coverage", meta = (ClampMin = "1", ClampMax = "16", EditCondition = "bCoverageUseWarp"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet Noise Sphere|Coverage", meta = (ClampMin = "1", ClampMax = "16"))
 	int32 CoverageWarpOctaves = 6;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Planet Noise Sphere")
@@ -100,9 +124,8 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Planet Noise Sphere")
 	int32 LastSampleCount = 0;
 
-	static constexpr int32 MaxResolution = 4096;
-
 private:
+	static int32 ResolutionToPixels(EPlanetNoiseCubeResolution Res);
 	void EnsureTextures(int32 Dim);
 	UTextureCube* CreateCubeTexture(int32 Dim) const;
 	UTexture2D* CreateFaceTexture(int32 Dim) const;

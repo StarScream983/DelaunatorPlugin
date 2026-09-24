@@ -246,6 +246,27 @@ namespace PlanetNoise
 	}
 
 	/**
+	 * IQ domain warp f(p + h(p)) in 3D (Orbis WarpPosition3D / iquilezles.org/articles/warp).
+	 * h(p) = (FBm(p), FBm(p+o1), FBm(p+o2)); WarpOctaves = FBm octaves for h only.
+	 */
+	inline void WarpPositionIq3D(
+		float& X, float& Y, float& Z,
+		float WarpStrength = 0.5f,
+		int32 WarpOctaves = 6,
+		float Lacunarity = 2.f,
+		float Gain = 0.5f,
+		EBase Base = EBase::Simplex,
+		int32 Seed = 1337)
+	{
+		const float Ox = FBm(X,        Y,        Z,        WarpOctaves, Lacunarity, Gain, Base, Seed);
+		const float Oy = FBm(X + 5.2f, Y + 1.3f, Z + 2.8f, WarpOctaves, Lacunarity, Gain, Base, Seed + 911);
+		const float Oz = FBm(X + 1.7f, Y + 9.2f, Z + 4.1f, WarpOctaves, Lacunarity, Gain, Base, Seed + 1777);
+		X += WarpStrength * Ox;
+		Y += WarpStrength * Oy;
+		Z += WarpStrength * Oz;
+	}
+
+	/**
 	 * Domain warp: offset (X,Y,Z) by noise, then sample.
 	 * Amplitude is in the same units as the input coords.
 	 */
