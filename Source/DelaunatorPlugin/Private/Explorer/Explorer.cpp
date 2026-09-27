@@ -15,7 +15,7 @@
 // Sets default values
 AExplorer::AExplorer()
 {
- 	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
+ 	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need them.
 	PrimaryActorTick.bCanEverTick = true;
 
 	CapsuleComponent = CreateDefaultSubobject<UCapsuleComponent>(TEXT("CapsuleComponent"));
@@ -172,4 +172,3 @@ FVector AExplorer::GetExplorerLocation() const
 {
 	return GetActorLocation();
 }
-

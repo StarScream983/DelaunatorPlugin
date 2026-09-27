@@ -5,6 +5,7 @@
 #include "Containers/Queue.h"
 #include "CBTResource_Interface.h"
 #include "IndirectInstancingSceneProxy.h"
+#include "Engine/CollisionProfile.h"
 #include <string>
 #include <iostream>
 #include "Interfaces/IPluginManager.h"
@@ -44,6 +45,13 @@ UGeoDelaunatorComponent::UGeoDelaunatorComponent(const FObjectInitializer& Objec
 #endif
 	// GPU-rebuilt indirect mesh must be Movable or dynamic shadow maps often skip / cache-stale it.
 	Mobility = EComponentMobility::Movable;
+
+	// Coarse Chaos collision (Delaunay shell) so pawns can stand on the planet.
+	SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+	SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	SetCanEverAffectNavigation(false);
+	BodyInstance.bSimulatePhysics = false;
+	CanCharacterStepUpOn = ECB_Yes;
 
 	SyncPlanetColorDebugToRenderThread();
 }
@@ -128,78 +136,108 @@ void UGeoDelaunatorComponent::GetUsedMaterials(TArray<UMaterialInterface*>& OutM
 
 UBodySetup* UGeoDelaunatorComponent::GetBodySetup()
 {
-	/** Return the runtime BodySetup used by Chaos.
-	*  If collision has not been initialized yet, the final implementation
-	*  should lazily create/configure it here via `UpdateBodySetup()`.
-	*/
-	return nullptr;
+	if (MeshBodySetup == nullptr)
+	{
+		UpdateBodySetup();
+	}
+	return MeshBodySetup;
 }
 
 bool UGeoDelaunatorComponent::GetPhysicsTriMeshData(FTriMeshCollisionData* CollisionData, bool InUseAllTriData)
 {
-	/** Export the generated spherical mesh as raw triangle collision data.
-	*
-	*  Final implementation should:
-	*  1) Push all `FibonacciPoints` into `CollisionData->Vertices`
-	*  2) Push all `SphericalTriangles` into `CollisionData->Indices`
-	*  3) Set collision flags such as:
-	*     - `bFlipNormals`
-	*     - `bDeformableMesh`
-	*     - `bFastCook`
-	*
-	*  This is the equivalent of what `UProceduralMeshComponent` does when
-	*  providing complex collision from procedural mesh sections.
-	*/
-	/*if (!MeshBodySetup)
+	if (!CollisionData || !ContainsPhysicsTriMeshData(InUseAllTriData))
 	{
-		UpdateBodySetup();
+		return false;
 	}
 
-	return MeshBodySetup;*/
-	return false;
+	// Same radial scale as GeoVoronoiIndirectInstancingVertexFactory.ush
+	constexpr float CollisionElevationScale = 0.03f;
+	const float BaseRadius = static_cast<float>(PlanetRadius);
+	const int32 NumVerts = FibonacciPoints.Num();
+
+	CollisionData->Vertices.Reset(NumVerts);
+	for (int32 i = 0; i < NumVerts; ++i)
+	{
+		const float Elev = ElevationPerSite.IsValidIndex(i) ? ElevationPerSite[i] : 0.0f;
+		const float Radius = BaseRadius * (1.0f + Elev * CollisionElevationScale);
+		CollisionData->Vertices.Add(FVector3f(FibonacciPoints[i] * Radius));
+	}
+
+	CollisionData->Indices.Reset(SphericalTriangles.Num());
+	for (const FIntVector& Tri : SphericalTriangles)
+	{
+		if (!CollisionData->Vertices.IsValidIndex(Tri.X)
+			|| !CollisionData->Vertices.IsValidIndex(Tri.Y)
+			|| !CollisionData->Vertices.IsValidIndex(Tri.Z))
+		{
+			continue;
+		}
+
+		FTriIndices OutTri;
+		OutTri.v0 = Tri.X;
+		OutTri.v1 = Tri.Y;
+		OutTri.v2 = Tri.Z;
+
+		// Outward winding: Chaos needs faces that block from outside the planet.
+		const FVector3f A = CollisionData->Vertices[OutTri.v0];
+		const FVector3f B = CollisionData->Vertices[OutTri.v1];
+		const FVector3f C = CollisionData->Vertices[OutTri.v2];
+		const FVector3f FaceN = FVector3f::CrossProduct(B - A, C - A);
+		const FVector3f FaceCenter = (A + B + C) * (1.0f / 3.0f);
+		if (FVector3f::DotProduct(FaceN, FaceCenter) < 0.0f)
+		{
+			Swap(OutTri.v1, OutTri.v2);
+		}
+
+		CollisionData->Indices.Add(OutTri);
+	}
+
+	CollisionData->bFlipNormals = false;
+	CollisionData->bDeformableMesh = true;
+	CollisionData->bFastCook = true;
+	return CollisionData->Indices.Num() > 0;
 }
 
 bool UGeoDelaunatorComponent::ContainsPhysicsTriMeshData(bool InUseAllTriData) const
 {
-	/** Report whether valid procedural triangle collision currently exists.
-	*
-	*  Final implementation should typically return true when:
-	*  - there are generated sphere vertices in `FibonacciPoints`
-	*  - there are generated indices in `SphericalTriangles`
-	*/
-	return false;
+	return FibonacciPoints.Num() >= 3 && SphericalTriangles.Num() > 0;
 }
 
 void UGeoDelaunatorComponent::UpdateBodySetup()
 {
-	/** Create/configure the runtime BodySetup used for procedural collision.
-	*
-	*  Final implementation should:
-	*  - allocate `MeshBodySetup` if needed
-	*  - set `CollisionTraceFlag` (likely `CTF_UseComplexAsSimple`)
-	*  - disable mirrored collision if not needed
-	*  - enable double-sided geometry if appropriate for the sphere shell
-	*/
+	if (MeshBodySetup == nullptr)
+	{
+		MeshBodySetup = NewObject<UBodySetup>(this, NAME_None, RF_Transient | RF_DuplicateTransient);
+		MeshBodySetup->CollisionTraceFlag = CTF_UseComplexAsSimple;
+		MeshBodySetup->bMeshCollideAll = true;
+		MeshBodySetup->bDoubleSidedGeometry = false;
+	}
+
+	MeshBodySetup->DefaultInstance.SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
 }
 
 void UGeoDelaunatorComponent::UpdateCollision()
 {
-	/** Rebuild collision after the procedural spherical mesh changes.
-	*
-	*  Final implementation should:
-	*  - ensure BodySetup exists/configured
-	*  - invalidate old physics data
-	*  - recreate physics meshes
-	*  - recreate the component's physics state if already registered
-	*
-	*  This should be called after `GeoDelaunayFrom()` updates the CPU mesh.
-	*/
-	if (!MeshBodySetup)
+	if (!ContainsPhysicsTriMeshData(true))
 	{
-		MeshBodySetup = NewObject<UBodySetup>(this, UBodySetup::StaticClass());
-		MeshBodySetup->CollisionTraceFlag = CTF_UseComplexAsSimple;
-		MeshBodySetup->bMeshCollideAll = true;
+		return;
 	}
+
+	const double T0 = FPlatformTime::Seconds();
+
+	UpdateBodySetup();
+	MeshBodySetup->InvalidatePhysicsData();
+	MeshBodySetup->CreatePhysicsMeshes();
+
+	if (IsRegistered())
+	{
+		RecreatePhysicsState();
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunator collision cooked: %d verts, %d tris, %.2f ms"),
+		FibonacciPoints.Num(),
+		SphericalTriangles.Num(),
+		(FPlatformTime::Seconds() - T0) * 1000.0);
 }
 
 /*****************************************************************************
@@ -1193,6 +1231,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	// InitRHI runs asynchronously on the render thread; the proxy's GetViewRelevance
 	// gates on IsGPUReady() so it will suppress drawing until upload completes.
 	MarkRenderStateDirty();
+	UpdateCollision();
 
 	//*******************************************************************
 	//TEST for lambda function capture of inner parameters with [=, this]
