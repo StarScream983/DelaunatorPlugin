@@ -301,27 +301,25 @@ void UPlanetNoisePreviewComponent::DrawImGui()
 		ImGui::TextUnformatted("Base");
 		ImGui::SameLine(); ImGui::TextDisabled("(Simplex)");
 		{
-			int32 BaseIdx = 0;
-			if (BaseType == EPlanetNoiseBaseType::Perlin) BaseIdx = 1;
-			else if (BaseType == EPlanetNoiseBaseType::Value) BaseIdx = 2;
-
-			if (ImGui::RadioButton("Simplex", BaseIdx == 0))
+			const int32 BaseIdx = static_cast<int32>(BaseType);
+			const auto PickBase = [&](int32 Idx, EPlanetNoiseBaseType Type, const char* Label)
 			{
-				BaseType = EPlanetNoiseBaseType::Simplex;
-				bParamsChanged = true;
-			}
+				if (ImGui::RadioButton(Label, BaseIdx == Idx))
+				{
+					BaseType = Type;
+					bParamsChanged = true;
+				}
+			};
+			PickBase(0, EPlanetNoiseBaseType::Perlin, "Perlin");
 			ImGui::SameLine();
-			if (ImGui::RadioButton("Perlin", BaseIdx == 1))
-			{
-				BaseType = EPlanetNoiseBaseType::Perlin;
-				bParamsChanged = true;
-			}
+			PickBase(1, EPlanetNoiseBaseType::Simplex, "Simplex");
 			ImGui::SameLine();
-			if (ImGui::RadioButton("Value", BaseIdx == 2))
-			{
-				BaseType = EPlanetNoiseBaseType::Value;
-				bParamsChanged = true;
-			}
+			PickBase(2, EPlanetNoiseBaseType::Value, "Value");
+			PickBase(3, EPlanetNoiseBaseType::OpenSimplex, "OS14");
+			ImGui::SameLine();
+			PickBase(4, EPlanetNoiseBaseType::OpenSimplex2F, "OS2F");
+			ImGui::SameLine();
+			PickBase(5, EPlanetNoiseBaseType::OpenSimplex2S, "OS2S");
 		}
 
 		// --- FBm layer ---

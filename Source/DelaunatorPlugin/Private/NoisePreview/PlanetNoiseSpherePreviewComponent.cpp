@@ -63,10 +63,13 @@ PlanetNoise::EBase UPlanetNoiseSpherePreviewComponent::ToBase(EPlanetNoiseBaseTy
 {
 	switch (T)
 	{
-	case EPlanetNoiseBaseType::Perlin: return PlanetNoise::EBase::Perlin;
-	case EPlanetNoiseBaseType::Value:  return PlanetNoise::EBase::Value;
+	case EPlanetNoiseBaseType::Perlin:        return PlanetNoise::EBase::Perlin;
+	case EPlanetNoiseBaseType::Value:         return PlanetNoise::EBase::Value;
+	case EPlanetNoiseBaseType::OpenSimplex:   return PlanetNoise::EBase::OpenSimplex;
+	case EPlanetNoiseBaseType::OpenSimplex2F: return PlanetNoise::EBase::OpenSimplex2F;
+	case EPlanetNoiseBaseType::OpenSimplex2S: return PlanetNoise::EBase::OpenSimplex2S;
 	case EPlanetNoiseBaseType::Simplex:
-	default:                           return PlanetNoise::EBase::Simplex;
+	default:                                  return PlanetNoise::EBase::Simplex;
 	}
 }
 
@@ -272,7 +275,8 @@ void UPlanetNoiseSpherePreviewComponent::RegeneratePreview()
 	const int32 FaceForImGui = FMath::Clamp(ImGuiFaceIndex, 0, 5);
 	const double T0 = FPlatformTime::Seconds();
 
-	ParallelFor(FaceCount * Dim, [this, Dim, InvDim, Radius, FaceForImGui, &AllFaces](int32 FlatY)
+	// ParallelFor already uses the thread pool; no outer Async (that oversubscribed + cancelled work).
+	ParallelFor(FaceCount * Dim, [this, Dim, InvDim, Radius, &AllFaces](int32 FlatY)
 	{
 		const int32 Face = FlatY / Dim;
 		const int32 Y = FlatY % Dim;
@@ -393,14 +397,25 @@ void UPlanetNoiseSpherePreviewComponent::DrawImGui()
 		bParamsChanged |= ImGui::DragInt("Coverage Seed", &CoverageSeed, 1.f, 0, 0, "%d");
 		ImGui::SameLine(); ImGui::TextDisabled("(%d)", 1337);
 		{
-			int32 BaseIdx = 0;
-			if (CoverageBase == EPlanetNoiseBaseType::Perlin) BaseIdx = 1;
-			else if (CoverageBase == EPlanetNoiseBaseType::Value) BaseIdx = 2;
-			if (ImGui::RadioButton("Cov Simplex", BaseIdx == 0)) { CoverageBase = EPlanetNoiseBaseType::Simplex; bParamsChanged = true; }
+			const int32 BaseIdx = static_cast<int32>(CoverageBase);
+			const auto PickCovBase = [&](int32 Idx, EPlanetNoiseBaseType Type, const char* Label)
+			{
+				if (ImGui::RadioButton(Label, BaseIdx == Idx))
+				{
+					CoverageBase = Type;
+					bParamsChanged = true;
+				}
+			};
+			PickCovBase(0, EPlanetNoiseBaseType::Perlin, "Perlin");
 			ImGui::SameLine();
-			if (ImGui::RadioButton("Cov Perlin", BaseIdx == 1)) { CoverageBase = EPlanetNoiseBaseType::Perlin; bParamsChanged = true; }
+			PickCovBase(1, EPlanetNoiseBaseType::Simplex, "Simplex");
 			ImGui::SameLine();
-			if (ImGui::RadioButton("Cov Value", BaseIdx == 2)) { CoverageBase = EPlanetNoiseBaseType::Value; bParamsChanged = true; }
+			PickCovBase(2, EPlanetNoiseBaseType::Value, "Value");
+			PickCovBase(3, EPlanetNoiseBaseType::OpenSimplex, "OS14");
+			ImGui::SameLine();
+			PickCovBase(4, EPlanetNoiseBaseType::OpenSimplex2F, "OS2F");
+			ImGui::SameLine();
+			PickCovBase(5, EPlanetNoiseBaseType::OpenSimplex2S, "OS2S");
 		}
 		bParamsChanged |= ImGui::DragFloat("Output Min", &NoiseOutputMin, 0.01f, -1.f, 1.f, "%.3f");
 		bParamsChanged |= ImGui::DragFloat("Output Max", &NoiseOutputMax, 0.01f, -1.f, 1.f, "%.3f");
@@ -422,7 +437,6 @@ void UPlanetNoiseSpherePreviewComponent::DrawImGui()
 			bWarpParamsChanged |= ImGui::DragFloat("Warp Strength", &CoverageWarpStrength, 0.01f, 0.f, 8.f, "%.3f");
 			bWarpParamsChanged |= ImGui::InputInt("Warp Octaves", &CoverageWarpOctaves);
 			CoverageWarpOctaves = FMath::Clamp(CoverageWarpOctaves, 1, 16);
-			// Tweaking warp knobs only rebakes when warp is actually applied.
 			if (bCoverageUseWarp)
 			{
 				bParamsChanged |= bWarpParamsChanged;

@@ -206,7 +206,7 @@ float4 UnpackColorRGBA8(uint PackedColor)
     return float4(R, G, B, A);
 }
 
-float4 HashUIntToColor(uint x)
+float4 HashUIntToColor_Old(uint x)
 {
     x ^= x << 13u;
     x ^= x >> 17u;
@@ -215,6 +215,29 @@ float4 HashUIntToColor(uint x)
     float g = float((x >> 8u) & 255u) / 255.0f;
     float b = float((x >> 16u) & 255u) / 255.0f;
     return float4(r, g, b, 1.0f);
+}
+
+/** Strong uint → RGB for SiteId debug. Fibonacci site indices are sequential along a
+ *  spherical spiral, so a weak xorshift left neighboring cells similar (washed-out bands).
+ *  PCG-style finalizer + per-channel multipliers give an avalanche across consecutive IDs. */
+float4 HashUIntToColor(uint x)
+{
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+
+    // Independent scramble per channel so R/G/B aren't correlated slices of one word.
+    uint rh = x * 0x9E3779B9u; rh ^= rh >> 16u;
+    uint gh = x * 0x85EBCA6Bu; gh ^= gh >> 16u;
+    uint bh = x * 0xC2B2AE35u; bh ^= bh >> 16u;
+
+    return float4(
+        float(rh & 255u) / 255.0f,
+        float(gh & 255u) / 255.0f,
+        float(bh & 255u) / 255.0f,
+        1.0f);
 }
 
 /** JS colormap bytes are display sRGB; UE BaseColor / lit shading expect linear reflectance. */

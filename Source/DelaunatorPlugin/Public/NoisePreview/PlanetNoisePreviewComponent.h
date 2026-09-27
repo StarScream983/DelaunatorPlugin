@@ -10,9 +10,12 @@ class UTexture2D;
 UENUM(BlueprintType)
 enum class EPlanetNoiseBaseType : uint8
 {
-	Simplex,
 	Perlin,
-	Value
+	Simplex,
+	Value,
+	OpenSimplex,
+	OpenSimplex2F,
+	OpenSimplex2S
 };
 
 UENUM(BlueprintType)
@@ -147,10 +150,13 @@ private:
 	{
 		switch (BaseType)
 		{
-		case EPlanetNoiseBaseType::Perlin: return PlanetNoise::EBase::Perlin;
-		case EPlanetNoiseBaseType::Value:  return PlanetNoise::EBase::Value;
+		case EPlanetNoiseBaseType::Perlin:        return PlanetNoise::EBase::Perlin;
+		case EPlanetNoiseBaseType::Value:         return PlanetNoise::EBase::Value;
+		case EPlanetNoiseBaseType::OpenSimplex:   return PlanetNoise::EBase::OpenSimplex;
+		case EPlanetNoiseBaseType::OpenSimplex2F: return PlanetNoise::EBase::OpenSimplex2F;
+		case EPlanetNoiseBaseType::OpenSimplex2S: return PlanetNoise::EBase::OpenSimplex2S;
 		case EPlanetNoiseBaseType::Simplex:
-		default:                           return PlanetNoise::EBase::Simplex;
+		default:                                  return PlanetNoise::EBase::Simplex;
 		}
 	}
 

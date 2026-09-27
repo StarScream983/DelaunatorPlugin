@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Noise/PlanetNoiseOpenSimplex.h"
 
 namespace PlanetNoise
 {
@@ -178,16 +179,19 @@ namespace PlanetNoise
 		return Perlin3D(X, Y, Z, Seed);
 	}
 
-	enum class EBase : uint8 { Perlin, Simplex, Value };
+	enum class EBase : uint8 { Perlin, Simplex, Value, OpenSimplex, OpenSimplex2F, OpenSimplex2S };
 
 	FORCEINLINE float Sample(EBase Base, float X, float Y, float Z, int32 Seed)
 	{
 		switch (Base)
 		{
-		case EBase::Value:   return Value3D(X, Y, Z, Seed);
-		case EBase::Perlin:  return Perlin3D(X, Y, Z, Seed);
+		case EBase::Value:        return Value3D(X, Y, Z, Seed);
+		case EBase::Perlin:       return Perlin3D(X, Y, Z, Seed);
+		case EBase::OpenSimplex:  return OpenSimplex3D(X, Y, Z, Seed);
+		case EBase::OpenSimplex2F: return OpenSimplex2F_3D(X, Y, Z, Seed);
+		case EBase::OpenSimplex2S: return OpenSimplex2S_3D(X, Y, Z, Seed);
 		case EBase::Simplex:
-		default:             return Simplex3D(X, Y, Z, Seed);
+		default:                  return Simplex3D(X, Y, Z, Seed);
 		}
 	}
 
