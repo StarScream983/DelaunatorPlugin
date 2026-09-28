@@ -27,6 +27,7 @@ the per‑subsystem sections above are the source of truth.)
 - _YYYY‑MM‑DD — initial skeleton._
 - **2026‑05‑04** — **§6 Elevation:** full pipeline (boundary stress, `Hybrid2`, `BlurBoundaryStress`, `AssignElevations`, `GeoDelaunayFrom` order), GPU prime/InitRHI/upload/release, **§6.8 binding table** with file paths + line numbers; **§9** status note for `ElevationPerSite` draw path.
 - **2026‑05‑04** — **§12 DF64:** planned GPU/LWC double-float position path; **§12.1–12.5** now embed full HLSL + CPU split pseudocode (transcript retains extra caveats).
+- **2026‑09‑27** — **Collision:** coarse Chaos trimesh; notes at end of this file.
 
 ---
 
@@ -1082,3 +1083,115 @@ The VF only moves vertices in the VS (`Radius = PlanetRadius * (1 + Elev * …)`
 There’s a note in `IndirectInstancingSceneProxy.h` that `GetMeshShaderMap` can be **nullptr during the DepthPass**, so **shadow-depth** for this mesh may be unreliable even though main-view depth usually works.
 
 **Bottom line:** Main camera depth — yes, via standard UE mesh rasterization. Custom depth buffer logic — no. Per-pixel depth — no, only VS elevation.
+
+---
+
+## Collision
+
+Collision is the `IInterface_CollisionDataProvider` path: Chaos asks for a triangle mesh, we fill it from the Delaunay sphere, cook it, and attach it to the component. Call order after planet gen: `GeoDelaunayFrom()` → `UpdateCollision()`.
+
+---
+
+### Constructor (`UGeoDelaunatorComponent`)
+
+Not a collision function, but it turns the primitive into a blocker:
+
+- `BlockAll` — hits pawn, camera, world traces
+- `QueryAndPhysics` — both line traces and physics
+- `bSimulatePhysics = false` — static world, not a rigid body
+- `CanCharacterStepUpOn = Yes` — characters can stand on it
+
+Without this, cooking a mesh still would not block the explorer.
+
+---
+
+### `GetBodySetup()`
+
+Engine entry: “what collision asset does this component use?”
+
+Creates `MeshBodySetup` via `UpdateBodySetup()` if missing, then returns it. `UPrimitiveComponent` uses this to create the physics state. Returning `nullptr` (the old stub) meant **no collision**.
+
+---
+
+### `ContainsPhysicsTriMeshData(bool)`
+
+Yes/no: do we have a mesh to cook?
+
+True if there are at least 3 Fibonacci verts and at least one Delaunay triangle. `InUseAllTriData` is unused (ProceduralMesh leftover).
+
+`CreatePhysicsMeshes()` calls this first; if false, nothing is cooked.
+
+---
+
+### `WantsNegXTriMesh()` (header)
+
+Always `false`. Old PhysX mirrored some meshes in −X. A sphere does not need that.
+
+---
+
+### `GetPhysicsTriMeshData(FTriMeshCollisionData*)`
+
+This is the mesh export. Chaos calls it while cooking.
+
+1. **Vertices** — each `FibonacciPoints[i]` is a unit-sphere direction. Same formula as the shader:
+
+   `Radius = PlanetRadius * (1 + ElevationPerSite[i] * 0.03)`
+   `Vertex = direction * Radius`
+
+2. **Indices** — copy `SphericalTriangles`. Skip bad indices.
+
+3. **Winding** — if face normal points inward (`dot(N, faceCenter) < 0`), swap v1/v2 so Chaos blocks from **outside**.
+
+4. **Flags**
+   - `bFlipNormals = false` — winding already outward
+   - `bDeformableMesh = true` — runtime cook, not a static `.uasset`
+   - `bFastCook = true` — faster, slightly looser cook
+
+Returns true if at least one triangle was added.
+
+This is **Delaunay**, not the Voronoi render mesh. Close enough to walk on; not pixel-identical to the terraces.
+
+---
+
+### `UpdateBodySetup()`
+
+Creates/configures the `UBodySetup` object (the cook container), not the triangles.
+
+- `NewObject` owned by the component, transient
+- `CTF_UseComplexAsSimple` — no capsule/sphere simple shape; the triangle mesh is used for **all** queries (pawn included)
+- `bMeshCollideAll` — collide with everything that queries it
+- `bDoubleSidedGeometry = false` — one-sided shell (outside only)
+- `DefaultInstance` = `BlockAll`
+
+---
+
+### `UpdateCollision()`
+
+Rebuild after the planet mesh changes. Called at the end of `GeoDelaunayFrom()`.
+
+1. Bail if no tri mesh
+2. Ensure body setup exists
+3. `InvalidatePhysicsData()` — drop the previous cook
+4. `CreatePhysicsMeshes()` — Chaos calls `ContainsPhysicsTriMeshData` + `GetPhysicsTriMeshData`, cooks acceleration structures
+5. `RecreatePhysicsState()` if already registered — attach the new cook to the running component (BeginPlay already registered, then `GeoDelauny()` runs)
+6. Log vert/tri counts and cook time
+
+---
+
+### How they connect
+
+```text
+BeginPlay
+  GeoDelauny() → GeoDelaunayFrom()
+    AssignElevations / mesh arrays filled
+    UpdateCollision()
+      UpdateBodySetup()
+      CreatePhysicsMeshes()
+        ContainsPhysicsTriMeshData?  → GetPhysicsTriMeshData()
+        Chaos cooks MeshBodySetup
+      RecreatePhysicsState()
+        GetBodySetup() → MeshBodySetup
+        component BlockAll + QueryAndPhysics
+```
+
+After that, the explorer capsule hits the elevated Delaunay shell. The GPU Voronoi mesh is **not** in Chaos; only this CPU triangle mesh is.
