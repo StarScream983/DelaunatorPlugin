@@ -5,6 +5,7 @@
 #include "Containers/Queue.h"
 #include "CBTResource_Interface.h"
 #include "IndirectInstancingSceneProxy.h"
+#include "MeshWeaverSceneProxy.h"
 #include "Engine/CollisionProfile.h"
 #include <string>
 #include <iostream>
@@ -88,7 +89,11 @@ FBoxSphereBounds UGeoDelaunatorComponent::CalcBounds(const FTransform& LocalToWo
 
 FPrimitiveSceneProxy* UGeoDelaunatorComponent::CreateSceneProxy()
 {
-	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::CreateSceneProxy"));
+	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::CreateSceneProxy bUseMeshWeaver=%d"), bUseMeshWeaver ? 1 : 0);
+	if (bUseMeshWeaver)
+	{
+		return new FMeshWeaverSceneProxy(this, GetCBTResources(), GetPlanetRadius());
+	}
 	return new FGeoVoronoiIndirectInstancingSceneProxy(this);
 }
 

@@ -1,0 +1,29 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#pragma once
+
+struct QuadRenderInstance
+{
+	uint GeoCenterA;
+	uint GeoCenterB;
+	uint SiteId;
+	uint Padding;
+};
+
+struct FHighLow_Pair
+{
+	float High;
+	float Low;
+};
+
+struct FVector3_HighLow
+{
+	FHighLow_Pair X;
+	FHighLow_Pair Y;
+	FHighLow_Pair Z;
+};
+
+float3 ReconstructPosition(FVector3_HighLow v)
+{
+	return float3(v.X.High + v.X.Low, v.Y.High + v.Y.Low, v.Z.High + v.Z.Low);
+}

@@ -380,6 +380,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category = Rendering)
 	UMaterialInterface* Material = nullptr;
 
+	/** When true, CreateSceneProxy uses FMeshWeaverSceneProxy instead of the indirect-instancing VF path. */
+	UPROPERTY(EditAnywhere, Category = Rendering)
+	bool bUseMeshWeaver = true;
+
 public:
 	UMaterialInterface* GetMaterial() const { return Material; }
 protected:

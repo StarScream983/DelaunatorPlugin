@@ -828,7 +828,8 @@ Without depth you only get a **ray**, not a point on the planet. With depth you 
 
 ---
 
-# 
+# MESH WEAVER IMPLEMENTATION
+
 Yes. It’s all in your UE 5.3 install. You don’t write lighting yourself.
 
 **Hook (plugin):** `D:\UNREAL_ENGINEs\UE_5.3\Engine\Source\Runtime\Engine\Public\SceneViewExtension.h`  
@@ -880,3 +881,48 @@ So: SVE + `EncodeGBuffer` into that hook = UE lights. Not `PrePostProcessPass` (
 - Planet gen, plates, elevation arrays
 
 Collision and the GPU draw are separate. This only replaces how pixels get into the GBuffer.
+
+---
+
+## FMeshWeaverSceneProxy
+
+`FMeshWeaverSceneProxy` is in `MeshWeaverCore`. `UGeoDelaunatorComponent` has **`bUseMeshWeaver`** (on by default). Weaver does not include the planet component — ctor takes `UPrimitiveComponent*`, CBT pointer, radius.
+
+**Ctor** — registers the proxy with the scene (transform, bounds). Stores CBT + radius. No VF, no material.
+
+**`GetTypeHash`** — engine identity for this proxy class.
+
+**`GetMemoryFootprint`** — debug/stat size.
+
+**`OnTransformChanged`** — empty. Fill later if the SVE needs an updated local-to-world.
+
+**`CreateRenderThreadResources`** — render-thread init. Creates `FMeshWeaverSceneViewExtension`.
+
+**`DestroyRenderThreadResources`** — drops the extension.
+
+**`GetViewRelevance`** — whether this view should consider the planet. True only if CBT GPU buffers exist. Opaque, dynamic, **no shadows** yet. No material relevance.
+
+**`GetDynamicMeshElements`** — empty. That is the point: no `FMeshBatch`.
+
+With the flag on, the planet is in the scene but draws nothing until the view extension exists. Old VF path is unchanged while the flag is off.
+
+---
+
+## FMeshWeaverSceneViewExtension
+
+Owned by `FMeshWeaverSceneProxy` (`NewExtension` in `CreateRenderThreadResources`, `Reset` in destroy). Does not include `UGeoDelaunatorComponent`.
+
+**Ctor** — `FAutoRegister` first (required), then the proxy pointer.
+
+**`SetupViewFamily` / `SetupView` / `BeginRenderViewFamily`** — game-thread ISceneViewExtension pures. Empty.
+
+**`IsActiveThisFrame_Internal`** — skip the hook if CBT GPU buffers are not ready.
+
+**`PostRenderBasePassDeferred_RenderThread`** — after BasePass, GBuffer + depth still bound. Calls `AddMeshWeaverDrawPass` (indirect draw + GBuffer pack). Do not use `PrePostProcessPass` (that is after lighting).
+
+**Global VS (`MeshWeaverDraw.usf`)** — do not define `UnpackRGBA8` (Engine `Common.ush` already includes it). UE 5.3 View has no `WorldToClip`; use `WorldPos + View.RelativePreViewTranslation` then `View.TranslatedWorldToClip`.
+
+**Rasterizer** — index buffer is CCW `{0,1,2}` (same as II). Use `CM_CW` (UE opaque default). `CM_CCW` culls the outer shell and shows the inner far hemisphere.
+
+---
+

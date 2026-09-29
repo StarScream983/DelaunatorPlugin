@@ -1,0 +1,73 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+// Copied from GeoVoronoiIndirectInstancingCompute.usf InitInstanceBufferCS + CullInstancesCS.
+
+#include "/Engine/Private/Common.ush"
+#include "MeshWeaverCommon.ush"
+
+RWBuffer<uint> RWIndirectArgsBuffer;
+RWStructuredBuffer<QuadRenderInstance> RWInstanceBuffer;
+
+StructuredBuffer<uint2> VoronoiGeoMeshRanges;
+StructuredBuffer<int> VoronoiGeoMeshFlat;
+
+uint NumSites;
+uint NumVoronoiCenters;
+uint NumVoronoiGeoMeshFlat;
+uint MaxInstances;
+int NumIndices;
+
+[numthreads(1, 1, 1)]
+void InitInstanceBufferCS()
+{
+	RWIndirectArgsBuffer[0] = NumIndices;
+	RWIndirectArgsBuffer[1] = 0;
+	RWIndirectArgsBuffer[2] = 0;
+	RWIndirectArgsBuffer[3] = 0;
+	RWIndirectArgsBuffer[4] = 0;
+}
+
+[numthreads(64, 1, 1)]
+void CullInstancesCS(uint3 DispatchThreadId : SV_DispatchThreadID)
+{
+	uint SiteId = DispatchThreadId.x;
+	if (SiteId >= NumSites)
+		return;
+
+	uint2 Range = VoronoiGeoMeshRanges[SiteId];
+	uint Start = Range.x;
+	uint Count = Range.y;
+
+	if (Count < 2)
+		return;
+	if (Start >= NumVoronoiGeoMeshFlat)
+		return;
+
+	Count = min(Count, NumVoronoiGeoMeshFlat - Start);
+	if (Count < 2)
+		return;
+
+	for (uint i = 0; i < Count; ++i)
+	{
+		uint GeoCenterA = (uint)VoronoiGeoMeshFlat[Start + i];
+		uint GeoCenterB = (uint)VoronoiGeoMeshFlat[Start + ((i + 1) % Count)];
+		if (GeoCenterA >= NumVoronoiCenters || GeoCenterB >= NumVoronoiCenters)
+			continue;
+
+		uint Write;
+		InterlockedAdd(RWIndirectArgsBuffer[1], 1, Write);
+		if (Write < MaxInstances)
+		{
+			QuadRenderInstance OutInstance;
+			OutInstance.GeoCenterA = GeoCenterA;
+			OutInstance.GeoCenterB = GeoCenterB;
+			OutInstance.SiteId = SiteId;
+			OutInstance.Padding = 0;
+			RWInstanceBuffer[Write] = OutInstance;
+		}
+		else
+		{
+			uint Dummy;
+			InterlockedAdd(RWIndirectArgsBuffer[1], -1, Dummy);
+		}
+	}
+}

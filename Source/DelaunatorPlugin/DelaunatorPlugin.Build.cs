@@ -38,7 +38,8 @@ public class DelaunatorPlugin : ModuleRules
 				"RenderCore",
 				"Renderer",
 				"RHI",
-				"IndirectInstancingCore"
+				"IndirectInstancingCore",
+				"MeshWeaverCore"
             }
 			);
 			

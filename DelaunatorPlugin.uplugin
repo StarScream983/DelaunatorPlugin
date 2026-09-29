@@ -26,6 +26,11 @@
 			"LoadingPhase": "Default"
 		},
 		{
+			"Name": "MeshWeaverCore",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		},
+		{
 			"Name": "DelaunatorPlugin",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"

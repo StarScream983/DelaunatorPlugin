@@ -1,0 +1,86 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#include "/Engine/Private/Common.ush"
+#include "MeshWeaverCommon.ush"
+
+StructuredBuffer<QuadRenderInstance> InstanceBuffer;
+StructuredBuffer<FVector3_HighLow> VoronoiGeoCenters;
+StructuredBuffer<FVector3_HighLow> CBT_FibonacciPoints;
+Buffer<uint> VoronoiCellColors;
+Buffer<float> ElevationPerSite;
+
+float PlanetRadius;
+float4x4 LocalToWorld;
+
+struct FVSIn
+{
+	uint VertexId : SV_VertexID;
+	uint InstanceId : SV_InstanceID;
+};
+
+struct FVSOut
+{
+	float4 ClipPos : SV_Position;
+	float3 WorldNrm : TEXCOORD0;
+	float3 BaseColor : TEXCOORD1;
+};
+
+FVSOut MainVS(FVSIn In)
+{
+	QuadRenderInstance Inst = InstanceBuffer[In.InstanceId];
+	float3 V0 = ReconstructPosition(VoronoiGeoCenters[Inst.GeoCenterA]);
+	float3 V1 = ReconstructPosition(VoronoiGeoCenters[Inst.GeoCenterB]);
+	float3 V2 = ReconstructPosition(CBT_FibonacciPoints[Inst.SiteId]);
+
+	float3 VertexPos = (In.VertexId == 0) ? V0 : ((In.VertexId == 1) ? V1 : V2);
+
+	float Elev = ElevationPerSite[Inst.SiteId];
+	const float ElevationScale = 0.03f;
+	float3 LocalPos = VertexPos * (PlanetRadius * (1.0f + Elev * ElevationScale));
+
+	float3 LocalNrm = normalize(cross(V1 - V0, V2 - V0));
+	if (dot(LocalNrm, VertexPos) < 0.0f)
+	{
+		LocalNrm = -LocalNrm;
+	}
+
+	float3 WorldPos = mul(float4(LocalPos, 1.0f), LocalToWorld).xyz;
+	float3 WorldNrm = normalize(mul((float3x3)LocalToWorld, LocalNrm));
+
+	// UE 5.3 View UB has no WorldToClip. Camera-recenter then TranslatedWorldToClip
+	// (same idea as the VF's LWCAdd(WorldPosition, PreViewTranslation)).
+	float3 TranslatedWorldPos = WorldPos + View.RelativePreViewTranslation;
+
+	FVSOut O;
+	O.ClipPos = mul(float4(TranslatedWorldPos, 1.0f), View.TranslatedWorldToClip);
+	O.WorldNrm = WorldNrm;
+	O.BaseColor = UnpackRGBA8(VoronoiCellColors[Inst.SiteId]).rgb;
+	return O;
+}
+
+// Target0 = SceneColor, Target1-3 = GBufferA/B/C (FSceneTextures::GetGBufferRenderTargets).
+struct FPSOut
+{
+	float4 SceneColor : SV_Target0;
+	float4 GBufferA : SV_Target1;
+	float4 GBufferB : SV_Target2;
+	float4 GBufferC : SV_Target3;
+	float4 GBufferD : SV_Target4;
+	float4 GBufferE : SV_Target5;
+};
+
+FPSOut MainPS(FVSOut In)
+{
+	float3 N = normalize(In.WorldNrm);
+	float3 Albedo = In.BaseColor;
+
+	FPSOut O;
+	O.SceneColor = float4(0, 0, 0, 0);
+	O.GBufferA = float4(N * 0.5f + 0.5f, 0.0f);
+	// metal, spec, roughness, shading model id 1 (DefaultLit) in alpha / 255
+	O.GBufferB = float4(0.0f, 0.5f, 0.5f, 1.0f / 255.0f);
+	O.GBufferC = float4(Albedo, 1.0f);
+	O.GBufferD = 0;
+	O.GBufferE = 1;
+	return O;
+}
