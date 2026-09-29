@@ -92,7 +92,7 @@ FPrimitiveSceneProxy* UGeoDelaunatorComponent::CreateSceneProxy()
 	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::CreateSceneProxy bUseMeshWeaver=%d"), bUseMeshWeaver ? 1 : 0);
 	if (bUseMeshWeaver)
 	{
-		return new FMeshWeaverSceneProxy(this, GetCBTResources(), GetPlanetRadius());
+		return new FMeshWeaverSceneProxy(this, GetCBTResources(), GetPlanetRadius(), bMeshWeaverUnlit);
 	}
 	return new FGeoVoronoiIndirectInstancingSceneProxy(this);
 }
@@ -324,10 +324,11 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 			"Land distance (coast BFS)",
 		};
 		int32 ColorDbgIdx = static_cast<int32>(PlanetColorDebug);
-		if (ImGui::Combo("Planet color debug", &ColorDbgIdx, PlanetColorDebugLabels, UE_ARRAY_COUNT(PlanetColorDebugLabels)))
+		if (ImGui::Combo("Color View Mode", &ColorDbgIdx, PlanetColorDebugLabels, UE_ARRAY_COUNT(PlanetColorDebugLabels)))
 		{
 			PlanetColorDebug = static_cast<EGeoVoronoiPlanetColorDebug>(FMath::Clamp(ColorDbgIdx, 0, 6));
 		}
+		ImGui::Checkbox("Mesh Weaver unlit (flat site colors)", &bMeshWeaverUnlit);
 	}
 	ImGui::End();
 #pragma endregion PLANET_GENERAL_DATA_WINDOW
@@ -587,6 +588,12 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 #endif
 
 	SyncPlanetColorDebugToRenderThread();
+	if (bUseMeshWeaver && SceneProxy)
+	{
+		FMeshWeaverSceneProxy* WeaverProxy = static_cast<FMeshWeaverSceneProxy*>(SceneProxy);
+		WeaverProxy->SetUnlit(bMeshWeaverUnlit);
+		WeaverProxy->SetColorViewMode(static_cast<uint32>(PlanetColorDebug));
+	}
 
 	// SPHERE DELAUNAY DEBUG DRAW
 	const FTransform& ComponentTransform = GetComponentTransform();

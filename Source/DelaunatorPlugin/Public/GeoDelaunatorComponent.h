@@ -384,6 +384,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category = Rendering)
 	bool bUseMeshWeaver = true;
 
+	/** Mesh Weaver: unlit = flat site colors (no lighting). Toggle from ImGui while working on CBT / height. */
+	UPROPERTY(EditAnywhere, Category = Rendering)
+	bool bMeshWeaverUnlit = true;
+
 public:
 	UMaterialInterface* GetMaterial() const { return Material; }
 protected:

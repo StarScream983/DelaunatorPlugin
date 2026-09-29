@@ -15,18 +15,21 @@ const static FName NAME_MeshWeaver(TEXT("MeshWeaver"));
 FMeshWeaverSceneProxy::FMeshWeaverSceneProxy(
 	UPrimitiveComponent* InComponent,
 	const TSharedPtr<FCBTResource_Interface>& InCBTResources,
-	float InPlanetRadius)
+	float InPlanetRadius,
+	bool bInUnlit)
 	: FPrimitiveSceneProxy(InComponent, NAME_MeshWeaver)
 	, PlanetRadius(InPlanetRadius)
 	, CBTResources(InCBTResources)
+	, UnlitFlag(bInUnlit ? 1u : 0u)
+	, ColorViewFlag(0)
 {
 	bHasDeformableMesh = false;
 	// Opaque GBuffer inject; no material shading model from a UMaterial.
 	bVerifyUsedMaterials = false;
 	GetMeshWeaverCullExtension().RegisterExtension();
 
-	UE_LOG(LogTemp, Warning, TEXT("FMeshWeaverSceneProxy ctor, CBTResources valid=%d"),
-		CBTResources.IsValid() ? 1 : 0);
+	UE_LOG(LogTemp, Warning, TEXT("FMeshWeaverSceneProxy ctor, CBTResources valid=%d unlit=%d"),
+		CBTResources.IsValid() ? 1 : 0, bInUnlit ? 1 : 0);
 }
 
 SIZE_T FMeshWeaverSceneProxy::GetTypeHash() const

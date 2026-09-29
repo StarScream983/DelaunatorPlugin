@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "/Engine/Private/Common.ush"
+#include "/Engine/Private/DeferredShadingCommon.ush"
 #include "MeshWeaverCommon.ush"
 
 StructuredBuffer<QuadRenderInstance> InstanceBuffer;
@@ -8,9 +9,106 @@ StructuredBuffer<FVector3_HighLow> VoronoiGeoCenters;
 StructuredBuffer<FVector3_HighLow> CBT_FibonacciPoints;
 Buffer<uint> VoronoiCellColors;
 Buffer<float> ElevationPerSite;
+Buffer<float> DistanceToBoundaryNormPerSite;
+Buffer<float> ErosionControlPerSite;
+Buffer<uint> LandDistanceField;
 
 float PlanetRadius;
 float4x4 LocalToWorld;
+uint Unlit;
+uint ColorViewMode;
+float MaxLandDistance;
+
+// Same logic as GeoVoronoiPickDebugVertexColor in GeoVoronoiIndirectInstancing.ush.
+float4 HashUIntToColor(uint x)
+{
+	x ^= x >> 16u;
+	x *= 0x7feb352du;
+	x ^= x >> 15u;
+	x *= 0x846ca68bu;
+	x ^= x >> 16u;
+	uint rh = x * 0x9E3779B9u; rh ^= rh >> 16u;
+	uint gh = x * 0x85EBCA6Bu; gh ^= gh >> 16u;
+	uint bh = x * 0xC2B2AE35u; bh ^= bh >> 16u;
+	return float4(float(rh & 255u) / 255.0f, float(gh & 255u) / 255.0f, float(bh & 255u) / 255.0f, 1.0f);
+}
+
+float3 GeoVoronoiSrgbUnitToLinear(float3 Srgb)
+{
+	const float3 Lo = Srgb / 12.92f;
+	const float3 Hi = pow((Srgb + 0.055f) / 1.055f, 2.4f);
+	return lerp(Lo, Hi, step(0.04045f, Srgb));
+}
+
+float4 GeoVoronoiRedBlob1843ColormapPackLinear(float3 RgbByte0To255)
+{
+	return float4(GeoVoronoiSrgbUnitToLinear(RgbByte0To255 / 255.0f), 1.0f);
+}
+
+float4 GeoVoronoiRedBlob1843Colormap(float Elev, float Moisture)
+{
+	static const float Width = 64.0f;
+	const float e = clamp(Elev, -1.0f, 1.0f);
+	float m = saturate(Moisture);
+	int xi = (int)round((e + 1.0f) * 0.5f * Width);
+	xi = clamp(xi, 0, (int)Width - 1);
+	const int HalfW = (int)(Width * 0.5f);
+	if (xi == HalfW - 1) return GeoVoronoiRedBlob1843ColormapPackLinear(float3(48.0f, 120.0f, 160.0f));
+	if (xi == HalfW - 2) return GeoVoronoiRedBlob1843ColormapPackLinear(float3(48.0f, 100.0f, 150.0f));
+	if (xi == HalfW - 3) return GeoVoronoiRedBlob1843ColormapPackLinear(float3(48.0f, 80.0f, 140.0f));
+	if (e < 0.0f)
+	{
+		return GeoVoronoiRedBlob1843ColormapPackLinear(float3(48.0f + 48.0f * e, 64.0f + 64.0f * e, 127.0f + 127.0f * e));
+	}
+	float eland = e;
+	m *= (1.0f - eland);
+	float r = 210.0f - 100.0f * m;
+	float g = 185.0f - 45.0f * m;
+	float b = 139.0f - 45.0f * m;
+	r = 255.0f * eland + r * (1.0f - eland);
+	g = 255.0f * eland + g * (1.0f - eland);
+	b = 255.0f * eland + b * (1.0f - eland);
+	return GeoVoronoiRedBlob1843ColormapPackLinear(float3(r, g, b));
+}
+
+float4 GeoVoronoiPickDebugVertexColor(uint Mode, uint SiteId, float Elev, uint PackedCellColor, float DistNorm, float ErosionControl, uint LandDistHops, float MaxLandDist)
+{
+	if (Mode == 0u) return UnpackRGBA8(PackedCellColor);
+	if (Mode == 1u)
+	{
+		float t = saturate(Elev * 0.5f + 0.5f);
+		float3 rgb = (t < 0.5f)
+			? lerp(float3(0.05f, 0.15f, 0.65f), float3(0.15f, 0.85f, 0.35f), t * 2.0f)
+			: lerp(float3(0.15f, 0.85f, 0.35f), float3(0.90f, 0.20f, 0.10f), (t - 0.5f) * 2.0f);
+		return float4(rgb, 1.0f);
+	}
+	if (Mode == 2u) return HashUIntToColor(SiteId);
+	if (Mode == 3u)
+	{
+		float eCl = clamp(Elev, -1.0f, 1.0f);
+		float moisture = saturate(0.72f - 0.55f * DistNorm);
+		return GeoVoronoiRedBlob1843Colormap(eCl, moisture);
+	}
+	if (Mode == 4u)
+	{
+		float t = saturate(DistNorm);
+		return float4(lerp(float3(0.15f, 0.55f, 0.95f), float3(0.95f, 0.25f, 0.12f), t), 1.0f);
+	}
+	if (Mode == 5u)
+	{
+		float t = saturate(ErosionControl);
+		return float4(lerp(float3(0.95f, 0.25f, 0.12f), float3(0.15f, 0.55f, 0.95f), t), 1.0f);
+	}
+	if (Mode == 6u)
+	{
+		if (Elev < 0.0f) return float4(0.05f, 0.12f, 0.82f, 1.0f);
+		const float MaxLand = max(MaxLandDist, 1.0f);
+		float t = saturate(float(LandDistHops) / MaxLand);
+		t = floor(t * 16.0f) / 16.0f;
+		return float4(lerp(float3(0.0f, 0.88f, 0.95f), float3(0.98f, 0.52f, 0.08f), t), 1.0f);
+	}
+	return HashUIntToColor(SiteId);
+}
 
 struct FVSIn
 {
@@ -45,20 +143,24 @@ FVSOut MainVS(FVSIn In)
 	}
 
 	float3 WorldPos = mul(float4(LocalPos, 1.0f), LocalToWorld).xyz;
-	float3 WorldNrm = normalize(mul((float3x3)LocalToWorld, LocalNrm));
-
-	// UE 5.3 View UB has no WorldToClip. Camera-recenter then TranslatedWorldToClip
-	// (same idea as the VF's LWCAdd(WorldPosition, PreViewTranslation)).
+	float3 WorldNrm = normalize(mul(LocalNrm, (float3x3)LocalToWorld));
 	float3 TranslatedWorldPos = WorldPos + View.RelativePreViewTranslation;
 
 	FVSOut O;
 	O.ClipPos = mul(float4(TranslatedWorldPos, 1.0f), View.TranslatedWorldToClip);
 	O.WorldNrm = WorldNrm;
-	O.BaseColor = UnpackRGBA8(VoronoiCellColors[Inst.SiteId]).rgb;
+	O.BaseColor = GeoVoronoiPickDebugVertexColor(
+		ColorViewMode,
+		Inst.SiteId,
+		Elev,
+		VoronoiCellColors[Inst.SiteId],
+		DistanceToBoundaryNormPerSite[Inst.SiteId],
+		ErosionControlPerSite[Inst.SiteId],
+		LandDistanceField[Inst.SiteId],
+		MaxLandDistance).rgb;
 	return O;
 }
 
-// Target0 = SceneColor, Target1-3 = GBufferA/B/C (FSceneTextures::GetGBufferRenderTargets).
 struct FPSOut
 {
 	float4 SceneColor : SV_Target0;
@@ -71,16 +173,21 @@ struct FPSOut
 
 FPSOut MainPS(FVSOut In)
 {
-	float3 N = normalize(In.WorldNrm);
-	float3 Albedo = In.BaseColor;
+	FGBufferData GBuffer = (FGBufferData)0;
+	GBuffer.WorldNormal = normalize(In.WorldNrm);
+	GBuffer.BaseColor = In.BaseColor;
+	GBuffer.Metallic = 0.0h;
+	GBuffer.Specular = 0.5h;
+	GBuffer.Roughness = 0.5h;
+	GBuffer.GBufferAO = 1.0h;
+	GBuffer.IndirectIrradiance = 0.0h;
+	GBuffer.PrecomputedShadowFactors = 1.0h;
+	GBuffer.ShadingModelID = Unlit != 0 ? SHADINGMODELID_UNLIT : SHADINGMODELID_DEFAULT_LIT;
+	GBuffer.SelectiveOutputMask = 0;
 
 	FPSOut O;
-	O.SceneColor = float4(0, 0, 0, 0);
-	O.GBufferA = float4(N * 0.5f + 0.5f, 0.0f);
-	// metal, spec, roughness, shading model id 1 (DefaultLit) in alpha / 255
-	O.GBufferB = float4(0.0f, 0.5f, 0.5f, 1.0f / 255.0f);
-	O.GBufferC = float4(Albedo, 1.0f);
-	O.GBufferD = 0;
-	O.GBufferE = 1;
+	O.SceneColor = Unlit != 0 ? float4(In.BaseColor, 1.0f) : 0;
+	float4 UnusedVelocity;
+	EncodeGBuffer(GBuffer, O.GBufferA, O.GBufferB, O.GBufferC, O.GBufferD, O.GBufferE, UnusedVelocity);
 	return O;
 }

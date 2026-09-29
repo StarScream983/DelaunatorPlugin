@@ -12,6 +12,7 @@
 #include "MeshPassProcessor.h"
 #include "PipelineStateCache.h"
 #include "RHIStaticStates.h"
+#include "RHIResources.h"
 #include "RenderGraphUtils.h"
 #include "SceneView.h"
 #include "ShaderParameterStruct.h"
@@ -39,8 +40,14 @@ BEGIN_SHADER_PARAMETER_STRUCT(FMeshWeaverDrawParameters, )
 	SHADER_PARAMETER_SRV(StructuredBuffer<FVector3_HighLow>, CBT_FibonacciPoints)
 	SHADER_PARAMETER_SRV(Buffer<uint>, VoronoiCellColors)
 	SHADER_PARAMETER_SRV(Buffer<float>, ElevationPerSite)
+	SHADER_PARAMETER_SRV(Buffer<float>, DistanceToBoundaryNormPerSite)
+	SHADER_PARAMETER_SRV(Buffer<float>, ErosionControlPerSite)
+	SHADER_PARAMETER_SRV(Buffer<uint>, LandDistanceField)
 	SHADER_PARAMETER(float, PlanetRadius)
 	SHADER_PARAMETER(FMatrix44f, LocalToWorld)
+	SHADER_PARAMETER(uint32, Unlit)
+	SHADER_PARAMETER(uint32, ColorViewMode)
+	SHADER_PARAMETER(float, MaxLandDistance)
 	RENDER_TARGET_BINDING_SLOTS()
 END_SHADER_PARAMETER_STRUCT()
 
@@ -89,7 +96,9 @@ void AddMeshWeaverDrawPass(
 
 	const TSharedPtr<FCBTResource_Interface>& CBT = Proxy->CBTResources;
 	if (!CBT->GetVoronoiGeoCentersSRV() || !CBT->GetFibonacciPointsSRV()
-		|| !CBT->GetVoronoiCellColorsSRV() || !CBT->GetElevationPerSiteSRV())
+		|| !CBT->GetVoronoiCellColorsSRV() || !CBT->GetElevationPerSiteSRV()
+		|| !CBT->GetDistanceToBoundaryNormPerSiteSRV() || !CBT->GetErosionControlPerSiteSRV()
+		|| !CBT->GetLandDistanceFieldSRV())
 	{
 		return;
 	}
@@ -101,9 +110,23 @@ void AddMeshWeaverDrawPass(
 	PassParameters->CBT_FibonacciPoints = CBT->GetFibonacciPointsSRV();
 	PassParameters->VoronoiCellColors = CBT->GetVoronoiCellColorsSRV();
 	PassParameters->ElevationPerSite = CBT->GetElevationPerSiteSRV();
+	PassParameters->DistanceToBoundaryNormPerSite = CBT->GetDistanceToBoundaryNormPerSiteSRV();
+	PassParameters->ErosionControlPerSite = CBT->GetErosionControlPerSiteSRV();
+	PassParameters->LandDistanceField = CBT->GetLandDistanceFieldSRV();
 	PassParameters->PlanetRadius = Proxy->PlanetRadius;
 	PassParameters->LocalToWorld = FMatrix44f(Proxy->GetLocalToWorld());
+	PassParameters->Unlit = Proxy->GetUnlit();
+	PassParameters->ColorViewMode = Proxy->GetColorViewMode();
+	PassParameters->MaxLandDistance = CBT->GetMaxLandDistance();
 	PassParameters->RenderTargets = RenderTargets;
+	// BasePass may bind depth as read-only (Nanite / DBuffer). Lighting reconstructs P from
+	// SceneDepth — without a write the pawn stays in the depth buffer and shows through, and
+	// N·L / specular use far-plane positions (X-shaped lighting).
+	if (PassParameters->RenderTargets.DepthStencil.GetTexture())
+	{
+		PassParameters->RenderTargets.DepthStencil.SetDepthStencilAccess(
+			FExclusiveDepthStencil::DepthWrite_StencilWrite);
+	}
 
 	TShaderMapRef<FMeshWeaverVS> VertexShader(GetGlobalShaderMap(View.GetFeatureLevel()));
 	TShaderMapRef<FMeshWeaverPS> PixelShader(GetGlobalShaderMap(View.GetFeatureLevel()));

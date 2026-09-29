@@ -21,7 +21,8 @@ public:
 	FMeshWeaverSceneProxy(
 		UPrimitiveComponent* InComponent,
 		const TSharedPtr<FCBTResource_Interface>& InCBTResources,
-		float InPlanetRadius);
+		float InPlanetRadius,
+		bool bInUnlit = true);
 
 	virtual ~FMeshWeaverSceneProxy() = default;
 
@@ -46,7 +47,14 @@ public:
 
 	const FMeshWeaverDrawBuffers* GetCulledDrawBuffers() const { return CulledDrawBuffers; }
 
+	void SetUnlit(bool bInUnlit) { UnlitFlag.Store(bInUnlit ? 1u : 0u); }
+	uint32 GetUnlit() const { return UnlitFlag.Load(); }
+	void SetColorViewMode(uint32 InMode) { ColorViewFlag.Store(InMode); }
+	uint32 GetColorViewMode() const { return ColorViewFlag.Load(); }
+
 private:
 	TSharedPtr<FMeshWeaverSceneViewExtension, ESPMode::ThreadSafe> ViewExtension;
 	mutable const FMeshWeaverDrawBuffers* CulledDrawBuffers = nullptr;
+	TAtomic<uint32> UnlitFlag;
+	TAtomic<uint32> ColorViewFlag;
 };

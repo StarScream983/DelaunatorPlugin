@@ -924,5 +924,11 @@ Owned by `FMeshWeaverSceneProxy` (`NewExtension` in `CreateRenderThreadResources
 
 **Rasterizer** — index buffer is CCW `{0,1,2}` (same as II). Use `CM_CW` (UE opaque default). `CM_CCW` culls the outer shell and shows the inner far hemisphere.
 
+**Depth** — copy of BasePass `RenderTargets` can be depth-read-only. Force `DepthWrite_StencilWrite` or SceneDepth stays at the pawn/far plane: objects show through and lighting reconstructs P at the wrong depth (X specular).
+
+**PS pack** — `EncodeGBuffer` (`DeferredShadingCommon.ush`), not `N*0.5+0.5` / raw albedo. `PrecomputedShadowFactors = 1`.
+
+**Lit / unlit** — `bMeshWeaverUnlit` on the component (ImGui *Delaunay General Data Debug*, default on). Unlit: `SHADINGMODELID_UNLIT` + albedo in SceneColor (flat site colors). Lit: DefaultLit GBuffer, SceneColor 0.
+
 ---
 
