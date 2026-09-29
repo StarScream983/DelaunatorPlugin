@@ -825,3 +825,58 @@ In UE you often use existing helpers (`SvPositionTo*`, `GetWorldPosition*`, `Scr
 | `InvViewProjection` | camera for that frame |
 
 Without depth you only get a **ray**, not a point on the planet. With depth you get **P** on the surface, then barycentrics with `V0,V1,V2`.
+
+---
+
+# 
+Yes. It’s all in your UE 5.3 install. You don’t write lighting yourself.
+
+**Hook (plugin):** `D:\UNREAL_ENGINEs\UE_5.3\Engine\Source\Runtime\Engine\Public\SceneViewExtension.h`  
+`PostRenderBasePassDeferred_RenderThread` — BasePass is done, GBuffer + depth are still bound as `RenderTargets`. Draw here. Lighting has not run yet.
+
+**Pack GBuffer (shader):** `Engine\Shaders\Private\DeferredShadingCommon.ush` — `EncodeGBuffer` (~825). Fill `FGBufferData` (normal, base color, roughness, metallic, `SHADINGMODELID_DEFAULT_LIT`), encode, write MRTs.  
+5.3 BasePass actually calls `EncodeGBufferToMRT` from generated `AutogenShaderHeaders.ush` (`BasePassPixelShader.usf` ~1926). Same layout as your cooked dump in `VoronoiComponents\Intermediate\ShaderAutogen\PCD3D_SM6\AutogenShaderHeaders.ush`:
+
+- MRT1 GBufferA = normal  
+- MRT2 GBufferB = metal / spec / roughness / shading model  
+- MRT3 GBufferC = base color  
+- Depth = the DSV on those same `RenderTargets` (clip-space Z, like today)
+
+**Lighting (leave it):** `DeferredShadingRenderer.cpp` `RenderLights` (~3906) → `LightRendering.cpp` + `DeferredLightPixelShaders.usf`. Reads GBuffer + shadow mask, writes SceneColor. You never sample lights.
+
+**Shadows:** `RenderShadowDepthMaps` in the same renderer (~3497) + `ShadowDepthVertexShader.usf` / `ShadowDepthPixelShader.usf`. That pass runs **before** BasePass. Receive is free once your GBuffer/depth exist. Cast is not — you need a second depth-only indirect draw in the shadow pass (your VF already compiles those shaders today because of `FMeshBatch`).
+
+So: SVE + `EncodeGBuffer` into that hook = UE lights. Not `PrePostProcessPass` (that’s after lighting, SceneColor only).
+
+---
+
+**Now:** you own the triangles (cull CS → instance + indirect args). Unreal owns the draw. `GetDynamicMeshElements` hands UE an `FMeshBatch` + material vertex factory. UE’s BasePass writes GBuffer/depth, shadow depth pass uses the same batch, deferred lighting lights it.
+
+**SVE:** you still own the triangles. You also own the draw. Same buffers, but you `DrawIndexedPrimitiveIndirect` in `PostRenderBasePassDeferred_RenderThread` with a global VS/PS and pack GBuffer yourself. UE lighting still runs after that. No material, no mesh batch.
+
+---
+
+**Keep**
+
+- `UGeoDelaunatorComponent` data, CBT, elevation, collision
+- Scene proxy as the object that holds GPU resources and bounds
+- Renderer extension cull CS, `InstanceBuffer`, `IndirectArgs`
+- Voronoi/CBT SRVs
+- Index buffer `{0,1,2}`
+- VS triangle rebuild math (move it out of the VF `.ush` into a global `.usf`)
+
+**Change**
+
+- `GetDynamicMeshElements` — stop `AllocateMesh`. You still need this (or an SVE `PreRender` hook) to call `AddWork`, because that is what runs the cull.
+- `IndirectInstancingVertexFactory` + `GeoVoronoiIndirectInstancingVertexFactory.ush` — replace with `FGlobalShader` VS/PS. Material VF goes away.
+- `Mesh.MaterialRenderProxy` / `Material != nullptr` — draw no longer requires a material.
+- GBuffer/depth — your PS calls `EncodeGBuffer` into the `RenderTargets` from that BasePass hook.
+- Shadows — `Mesh.CastShadow = true` dies with the batch. Add a second depth-only indirect draw in the shadow pass or the planet stops casting.
+- `GetViewRelevance` — today it follows material relevance. Keep the proxy visible/opaque without depending on a material.
+
+**Don’t touch**
+
+- Collision (`GetPhysicsTriMeshData` / `UpdateCollision`)
+- Planet gen, plates, elevation arrays
+
+Collision and the GPU draw are separate. This only replaces how pixels get into the GBuffer.
