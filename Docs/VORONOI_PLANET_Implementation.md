@@ -19,18 +19,6 @@ known limitations · next steps*.
 
 ---
 
-## Change log
-
-(Append dated bullet points as substantive changes happen. Keep them short —
-the per‑subsystem sections above are the source of truth.)
-
-- _YYYY‑MM‑DD — initial skeleton._
-- **2026‑05‑04** — **§6 Elevation:** full pipeline (boundary stress, `Hybrid2`, `BlurBoundaryStress`, `AssignElevations`, `GeoDelaunayFrom` order), GPU prime/InitRHI/upload/release, **§6.8 binding table** with file paths + line numbers; **§9** status note for `ElevationPerSite` draw path.
-- **2026‑05‑04** — **§12 DF64:** planned GPU/LWC double-float position path; **§12.1–12.5** now embed full HLSL + CPU split pseudocode (transcript retains extra caveats).
-- **2026‑09‑27** — **Collision:** coarse Chaos trimesh; notes at end of this file.
-
----
-
 ## 6. Elevation field
 
 - **Purpose:** one scalar elevation per Voronoi/Delaunay site (`ElevationPerSite`), used for terrain logic and GPU debug displacement (radial scale in VS).
