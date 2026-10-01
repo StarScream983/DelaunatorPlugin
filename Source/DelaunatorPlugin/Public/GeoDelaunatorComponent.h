@@ -542,6 +542,16 @@ protected:
 	/** Game thread: `SyncPlanetColorDebugToRenderThread`; render thread: `GetPlanetColorDebugShaderValue_RenderThread`. */
 	TAtomic<uint32> PlanetColorDebugShaderValue;
 
+	// Sequential CPU split (paper §2 Algorithms 3–5). Pool index, not BisectorID.
+	void RefineBisector(int32 PoolIndex, int32 RecursionDepth = 0);
+	void SplitBisector(int32 PoolIndexJ, int32 PoolIndexK);
+	void RefineBisectorPointers(int32 ParentPool, int32 EvenPool, int32 OddPool);
+	int32 AllocateBisectorSlot();
+	void OccupyCbtPoolSlot(int32 PoolIndex);
+	bool IsLiveBisector(int32 PoolIndex) const;
+	bool GetBisectorVertices(int32 PoolIndex, int32 RootHeID, FVector& OutV0, FVector& OutV1, FVector& OutV2) const;
+	void DrawBisectorDebug(int32 PoolIndex, int32 RootHeID, float GroundRadius);
+	
 public:
 
 	FORCEINLINE float GetMaxLandDistance() const { return MaxLandDistance; }
@@ -690,7 +700,7 @@ protected:
 
 	void GeneratePlates_RedBlobRandomFill();
 	void GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors, TArray<int32>& OutHalfEdgeIndices) const;
-	void CollectVoronoiNeighborRings(int32 StartSite, int32 Depth=2, TArray<int32>& OutRingSites) const;
+	void CollectVoronoiNeighborRings(int32 StartSite, int32 Depth, TArray<int32>& OutRingSites) const;
 	// add fisher-yates shuffle to randomize the order of neighbors and avoid similar plate IDs
 	TArray<int32> PickRandomPlateSeeds(int32 Count, TArray<FPlateData>& OutSeeds);
 	TArray<int32> GetAncestorChain(int32 StartSite) const;

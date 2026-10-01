@@ -1193,4 +1193,4 @@ After that, the explorer capsule hits the elevated Delaunay shell. The GPU Voron
   - `Source/DelaunatorPlugin/Public/Explorer/PawnInterface.h`
   - `Source/DelaunatorPlugin/Public/PlanetPrototype.h` / `Private/PlanetPrototype.cpp`
   - `Source/DelaunatorPlugin/Public/GeoDelaunatorComponent.h` — `Pawn`, `RegisterPawn`, `UnregisterPawn`
-- **Status:** working (basic). `PawnTick` finds closest site by max `Dot(pawnDir, FibonacciPoints[i])`, stores `ClosestSite`, yellow debug sphere on that site, blue debug spheres on Voronoi neighbors. Gravity force / CBT split not implemented yet.
+- **Status:** working (basic). `PawnTick` finds closest site by max `Dot(pawnDir, FibonacciPoints[i])`, stores `ClosestSite`, yellow debug sphere on that site, blue debug spheres on Voronoi neighbors. Sequential CPU split of that site's root bisectors (paper §2 Alg. 3–5) runs in `PawnTick`; magenta debug triangles for children. Gravity force not implemented yet.
