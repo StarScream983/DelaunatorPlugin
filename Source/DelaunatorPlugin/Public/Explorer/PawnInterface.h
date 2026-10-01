@@ -6,8 +6,6 @@
 #include "UObject/Interface.h"
 #include "PawnInterface.generated.h"
 
-class AExplorer;
-
 // This class does not need to be modified.
 UINTERFACE(MinimalAPI)
 class UPawnInterface : public UInterface
@@ -16,7 +14,7 @@ class UPawnInterface : public UInterface
 };
 
 /**
- * 
+ * Any actor (pawn, character, or non-pawn) that can enter the planet gravity volume.
  */
 class DELAUNATORPLUGIN_API IPawnInterface
 {
@@ -26,7 +24,7 @@ class DELAUNATORPLUGIN_API IPawnInterface
 public:
 
 	UFUNCTION()
-	virtual FVector GetExplorerLocation() const = 0;
+	virtual FVector GetPlanetOverlapLocation() const = 0;
 
 	/*UFUNCTION()
 	virtual AExplorer* GetExplorerActor() const = 0;*/

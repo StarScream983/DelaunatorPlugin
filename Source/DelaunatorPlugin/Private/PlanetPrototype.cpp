@@ -3,8 +3,8 @@
 
 #include "PlanetPrototype.h"
 #include "GeoDelaunatorComponent.h"
-#include "Explorer/Explorer.h"
 #include "Explorer/PawnInterface.h"
+#include "UObject/UnrealType.h"
 
 // Sets default values
 APlanetPrototype::APlanetPrototype()
@@ -15,21 +15,18 @@ APlanetPrototype::APlanetPrototype()
 
 	//RootComponent = CreateDefaultSubobject<USceneComponent>(FName("RootComponent"));
 	RootComponent = VoronoiPlanet = CreateDefaultSubobject<UGeoDelaunatorComponent>(FName("VoronoiPlanet"));
-	
-	float radius = (float)GravityVolumeRadius;
-	if(VoronoiPlanet)
-	{
-		radius = VoronoiPlanet->GetPlanetRadius() * 2.f;
-	}
 
 	GravityVolume = CreateDefaultSubobject<USphereComponent>("GravityVolume");
-	GravityVolume->InitSphereRadius(6000.f);
+	GravityVolume->InitSphereRadius((float)(PlanetRadius * 2.0));
 	GravityVolume->SetupAttachment(RootComponent);
 	GravityVolume->SetHiddenInGame(false);
 	GravityVolume->SetComponentTickEnabled(false);
 	GravityVolume->CanCharacterStepUpOn = ECB_No;
 	GravityVolume->SetCollisionResponseToAllChannels(ECollisionResponse::ECR_Ignore);
 	GravityVolume->SetCollisionResponseToChannel(ECollisionChannel::ECC_Pawn, ECollisionResponse::ECR_Overlap);
+	GravityVolume->SetCollisionResponseToChannel(ECollisionChannel::ECC_PhysicsBody, ECollisionResponse::ECR_Overlap);
+	GravityVolume->SetCollisionResponseToChannel(ECollisionChannel::ECC_WorldDynamic, ECollisionResponse::ECR_Overlap);
+	GravityVolume->SetCollisionResponseToChannel(ECollisionChannel::ECC_Vehicle, ECollisionResponse::ECR_Overlap);
 	GravityVolume->OnComponentBeginOverlap.AddDynamic(this, &APlanetPrototype::OnOverlapBegin);
 	GravityVolume->OnComponentEndOverlap.AddDynamic(this, &APlanetPrototype::OnOverlapEnd);
 }
@@ -38,8 +35,37 @@ APlanetPrototype::APlanetPrototype()
 void APlanetPrototype::BeginPlay()
 {
 	Super::BeginPlay();
-	
+	ApplyPlanetRadius();
 }
+
+void APlanetPrototype::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	ApplyPlanetRadius();
+}
+
+void APlanetPrototype::ApplyPlanetRadius()
+{
+	if (VoronoiPlanet)
+	{
+		VoronoiPlanet->SetPlanetRadius(PlanetRadius);
+	}
+	if (GravityVolume)
+	{
+		GravityVolume->SetSphereRadius((float)(PlanetRadius * 2.0), false);
+	}
+}
+
+#if WITH_EDITOR
+void APlanetPrototype::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+	if (PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(APlanetPrototype, PlanetRadius))
+	{
+		ApplyPlanetRadius();
+	}
+}
+#endif
 
 void APlanetPrototype::EndPlay(EEndPlayReason::Type EndPlayReason)
 {
@@ -57,10 +83,14 @@ void APlanetPrototype::OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActo
 {
 	if ((OtherActor != nullptr) && (OtherActor != this) && (OtherComp != nullptr) && OtherActor->GetClass()->ImplementsInterface(UPawnInterface::StaticClass()))
 	{
-		Explorer = Cast<IPawnInterface>(OtherActor);
-		if (Explorer && GEngine)
+		IPawnInterface* OverlapPawn = Cast<IPawnInterface>(OtherActor);
+		if (OverlapPawn && VoronoiPlanet)
 		{
-			GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("Explorer entered Gravity Volume"));
+			VoronoiPlanet->RegisterPawn(OverlapPawn);
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("Pawn entered Gravity Volume"));
+			}
 		}
 	}
 }
@@ -69,11 +99,14 @@ void APlanetPrototype::OnOverlapEnd(UPrimitiveComponent* OverlappedComp, AActor*
 {
 	if ((OtherActor != nullptr) && (OtherActor != this) && (OtherComp != nullptr) && OtherActor->GetClass()->ImplementsInterface(UPawnInterface::StaticClass()))
 	{
-		Explorer = nullptr;
+		IPawnInterface* OverlapPawn = Cast<IPawnInterface>(OtherActor);
+		if (VoronoiPlanet)
+		{
+			VoronoiPlanet->UnregisterPawn(OverlapPawn);
+		}
 		if (GEngine)
 		{
-			GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("Explorer exited Gravity Volume"));
+			GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Green, TEXT("Pawn exited Gravity Volume"));
 		}
 	}
 }
-

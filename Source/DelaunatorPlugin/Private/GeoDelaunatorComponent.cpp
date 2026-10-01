@@ -7,6 +7,8 @@
 #include "IndirectInstancingSceneProxy.h"
 #include "MeshWeaverSceneProxy.h"
 #include "Engine/CollisionProfile.h"
+#include "Engine/Engine.h"
+#include "Explorer/PawnInterface.h"
 #include <string>
 #include <iostream>
 #include "Interfaces/IPluginManager.h"
@@ -267,7 +269,26 @@ void UGeoDelaunatorComponent::BeginPlay()
 
 void UGeoDelaunatorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	UnregisterPawn(Pawn);
 	Super::EndPlay(EndPlayReason);
+}
+
+void UGeoDelaunatorComponent::PawnTick()
+{
+	if (!Pawn)
+	{
+		return;
+	}
+
+	const FVector PawnLocation = Pawn->GetPlanetOverlapLocation();
+	const FVector PlanetLocation = GetComponentLocation();
+	const float DistanceFromCenter = FVector::Dist(PawnLocation, PlanetLocation);
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(1, 0.1f, FColor::Cyan,
+			FString::Printf(TEXT("Pawn-planet: center %.1f"), DistanceFromCenter));
+	}
 }
 
 void UGeoDelaunatorComponent::BeginDestroy()

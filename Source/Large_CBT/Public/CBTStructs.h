@@ -33,14 +33,20 @@ struct FHalfEdge_CBT
 // Pointer to an invalid neighbor or index
 #define INVALID_POINTER 2147483647
 
-// Possible culling state
-#define BACK_FACE_CULLED -3
-#define FRUSTUM_CULLED -2
-#define TOO_SMALL -1
-#define UNCHANGED_ELEMENT 0
-#define BISECT_ELEMENT 1
-#define SIMPLIFY_ELEMENT 2
-#define MERGED_ELEMENT 3
+// BisectorCommand (paper §3.3 GenerateCommands): one int, a bit code, reset to 0 = keep.
+// Not an enum of 7 states. Cull (backface / frustum / too small) is a *decision* that
+// leaves the command at 0; it is not stored in this field.
+// Bits 0–2: split, one bit per edge (compatibility chain which edge to bisect).
+// Bits 3–5: merge (triangle vs border/quad config + “smallest index” so only one bisector allocates).
+// If split and merge both set, ignore merge (paper ReserveBlocks).
+#define CBT_CMD_KEEP            0
+#define CBT_CMD_SPLIT_EDGE0     (1 << 0)
+#define CBT_CMD_SPLIT_EDGE1     (1 << 1)
+#define CBT_CMD_SPLIT_EDGE2     (1 << 2)
+#define CBT_CMD_SPLIT_ANY       (CBT_CMD_SPLIT_EDGE0 | CBT_CMD_SPLIT_EDGE1 | CBT_CMD_SPLIT_EDGE2)
+#define CBT_CMD_MERGE_QUAD      (1 << 3)
+#define CBT_CMD_MERGE_BORDER    (1 << 4)
+#define CBT_CMD_MERGE_MININDEX  (1 << 5)
 
 // Root Bisector Buffer
 struct FRootBisector_CBT
@@ -53,15 +59,15 @@ public:
     {
     };
     FRootBisector_CBT(int32 InBisectorID, int32 InTwin, int32 InNext, int32 InPrev)
-        : BisectorID(InBisectorID), Twin(InTwin), Next(InNext), Prev(InPrev), BisectorCommand(UNCHANGED_ELEMENT), Child0(INVALID_POINTER), Child1(INVALID_POINTER), Child2(INVALID_POINTER), Child3(INVALID_POINTER)
+        : BisectorID(InBisectorID), Twin(InTwin), Next(InNext), Prev(InPrev), BisectorCommand(CBT_CMD_KEEP), Child0(INVALID_POINTER), Child1(INVALID_POINTER), Child2(INVALID_POINTER), Child3(INVALID_POINTER)
     {
     };
 
-    int32 BisectorID;
+    uint64 BisectorID;
     int32 Twin;
     int32 Next;
 	int32 Prev;
-    int32 BisectorCommand; // Split / Merge / Unchanged, stored as bitfield or enum
+    int32 BisectorCommand; // paper bit code: 0 = keep, bits 0–2 split, bits 3–5 merge
     int32 Child0;
 	int32 Child1;
 	int32 Child2;

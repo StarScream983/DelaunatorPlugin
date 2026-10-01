@@ -7,8 +7,6 @@
 #include "Components/SphereComponent.h"
 #include "PlanetPrototype.generated.h"
 
-class AExplorer;
-class IPawnInterface;
 class UGeoDelaunatorComponent;
 
 UCLASS()
@@ -25,14 +23,17 @@ protected:
 	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, Category = "PrototypePlanet")
 	USphereComponent* GravityVolume;
 
-	UPROPERTY(BlueprintReadOnly, EditAnywhere, Category = "PrototypePlanet")
-	int32 GravityVolumeRadius{ 10000 };
-
-	IPawnInterface* Explorer;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "100.0", UIMin = "100.0"), Category = "Rendering")
+	double PlanetRadius = 3000.0;
 	
 public:	
 	// Sets default values for this actor's properties
 	APlanetPrototype();
+
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+	virtual void OnConstruction(const FTransform& Transform) override;
 
 protected:
 	// Called when the game starts or when spawned
@@ -46,6 +47,8 @@ protected:
 
 	UFUNCTION()
 	virtual void OnOverlapEnd(UPrimitiveComponent* OverlappedComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
+
+	void ApplyPlanetRadius();
 
 public:	
 

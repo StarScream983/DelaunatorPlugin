@@ -168,7 +168,7 @@ void AExplorer::Roll(const FInputActionValue& Value)
 	SetActorRotation(NewQuat);
 }
 
-FVector AExplorer::GetExplorerLocation() const
+FVector AExplorer::GetPlanetOverlapLocation() const
 {
 	return GetActorLocation();
 }

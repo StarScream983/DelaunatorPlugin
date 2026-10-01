@@ -20,6 +20,7 @@
 
 class FCBTResource_Interface;
 class UMaterialInterface;
+class IPawnInterface;
 
 #define _PI UE_DOUBLE_PI
 #define _TAU UE_DOUBLE_TWO_PI
@@ -534,7 +535,54 @@ protected:
 	TAtomic<uint32> PlanetColorDebugShaderValue;
 
 public:
+
+	/*****************************************************************************
+	* BEGIN PLANET RADIUS
+	*****************************************************************************/
 	FORCEINLINE float GetPlanetRadius() const { return (float)PlanetRadius; }
+	FORCEINLINE void SetPlanetRadius(double InPlanetRadius)
+	{
+		PlanetRadius = InPlanetRadius;
+		UpdateBounds();
+		MarkRenderStateDirty();
+	}
+	/*****************************************************************************
+	* END PLANET RADIUS
+	*****************************************************************************/
+
+	/*****************************************************************************
+	* BEGIN PAWN
+	*****************************************************************************/
+	// Planet overlap: actor in the gravity volume, stored as IPawnInterface.
+	IPawnInterface* Pawn = nullptr;
+
+	FORCEINLINE void RegisterPawn(IPawnInterface* InPawn)
+	{
+		Pawn = InPawn;
+		if (Pawn)
+		{
+			StartPawnTimer();
+		}
+	}
+	FORCEINLINE void UnregisterPawn(IPawnInterface* InPawn)
+	{
+		if (Pawn == InPawn)
+		{
+			StopPawnTimer();
+			Pawn = nullptr;
+		}
+	}
+
+	// TIMER GOES HERE
+	FTimerHandle PawnTimerHandle;
+	FORCEINLINE void StartPawnTimer() { GetWorld()->GetTimerManager().SetTimer(PawnTimerHandle, this, &UGeoDelaunatorComponent::PawnTick, 0.1f, true); }
+	FORCEINLINE void StopPawnTimer() { GetWorld()->GetTimerManager().ClearTimer(PawnTimerHandle); }
+	UFUNCTION()
+	void PawnTick();
+	/*****************************************************************************
+	* END PAWN
+	*****************************************************************************/
+
 	FORCEINLINE float GetMaxLandDistance() const { return MaxLandDistance; }
 	FORCEINLINE TSharedPtr<FCBTResource_Interface> GetCBTResources() const { return CBTResources; }
 

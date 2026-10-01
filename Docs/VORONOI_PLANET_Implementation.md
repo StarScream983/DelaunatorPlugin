@@ -1183,3 +1183,14 @@ BeginPlay
 ```
 
 After that, the explorer capsule hits the elevated Delaunay shell. The GPU Voronoi mesh is **not** in Chaos; only this CPU triangle mesh is.
+
+---
+
+## Gravity volume overlap (2026-10-01)
+
+- **Purpose:** when an actor implementing `IPawnInterface` enters `APlanetPrototype::GravityVolume`, register it on `UGeoDelaunatorComponent` as `Pawn`; unregister on leave.
+- **Key files:**
+  - `Source/DelaunatorPlugin/Public/Explorer/PawnInterface.h`
+  - `Source/DelaunatorPlugin/Public/PlanetPrototype.h` / `Private/PlanetPrototype.cpp`
+  - `Source/DelaunatorPlugin/Public/GeoDelaunatorComponent.h` — `Pawn`, `RegisterPawn`, `UnregisterPawn`
+- **Status:** working (basic). Single registered pawn (last overlap wins). Distance / gravity force not implemented yet.
