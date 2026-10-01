@@ -1217,12 +1217,13 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 			HalfEdge_Buffer.Add(CBT_HE);
 
 			// Build Root Bisectors Buffer
-			RootBisectors_Buffer.Add(FRootBisector_CBT(CBT_HE.Edge, CBT_HE.Twin, CBT_HE.Next, CBT_HE.Prev));
+			//RootBisectors_Buffer.Add(FRootBisector_CBT(CBT_HE.Edge, CBT_HE.Twin, CBT_HE.Next, CBT_HE.Prev));
+			RootBisectors_Buffer.Add(FRootBisector_CBT(1, CBT_HE.Twin, CBT_HE.Next, CBT_HE.Prev));
 		}
 	}
 
 	// CALCULATING DEPTH AND BUILDING THE CBT BUFFER
-	const int32 NumRootBisectors = HalfEdge_Buffer.Num();
+	const int32 NumRootBisectors = HalfEdge_Buffer.Num(); // H number of half-edges
 	// ----------------------------------------------------
 	// 1) Choose a safe Depth based on number of bisectors
 	// ----------------------------------------------------
@@ -1239,13 +1240,14 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	// CBT bitfield layout (0-based):
 	// internal nodes: 0 .. NumLeaves-1
 	// leaves        : NumLeaves .. 2*NumLeaves-1
-	const int32 NumLeaves = 1 << D;             // 2^D
+	const int32 NumLeaves = 1 << D;
+	RootBisectors_Buffer.SetNum(NumLeaves);
 
 	CBT_Buffer.Empty();
 	CBT_Buffer.SetNumZeroed(2 * NumLeaves);           // all bits = 0
 
 	// Set the first H leaves (root bisectors) to 1, and calculating the sum reduction tree
-	for (int32 h = 0; h < NumLeaves; ++h)
+	/*for (int32 h = 0; h < NumLeaves; ++h)
 	{
 		if (CBT_Buffer.IsValidIndex(NumLeaves + h)) 
 		{
@@ -1258,9 +1260,27 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 		CBT_Buffer[Reverse_h] =  Node_2k + Node_2kplus1;
 
 		//if (Node_2k + Node_2kplus1>0) UE_LOG(LogTemp, Warning, TEXT("SUM ID: %d || SUM: %d"), Reverse_h, Node_2k + Node_2kplus1); // LOG INDICES WHICH SUM IS HIGHER THAN 0
+		
+	}*/
+
+	for (int32 h = 0; h < NumRootBisectors; ++h)
+	{
+		CBT_Buffer[NumLeaves + h] = 1;
+	}
+	for (int32 k = NumLeaves - 1; k >= 1; --k)
+	{
+		CBT_Buffer[k] = CBT_Buffer[2 * k] + CBT_Buffer[2 * k + 1];
 	}
 
-
+	AllocationCounter_Buffer = NumRootBisectors;
+	FPointer_CBT InvalidPointer;
+	InvalidPointer.IndexBuffer = INVALID_POINTER;
+	InvalidPointer.AvailabeBlock = INVALID_POINTER;
+	Pointer_Buffer.Init(InvalidPointer, NumLeaves);
+	/*****************************************************************************
+	* END CBT BUFFER
+	*****************************************************************************/
+	
 	if (CBTResources.IsValid())
 	{
 		if (CBTResources->IsInitialized())

@@ -534,8 +534,8 @@ protected:
 	TArray<FHalfEdge_CBT> HalfEdge_Buffer;
 	TArray<FRootBisector_CBT> RootBisectors_Buffer;
 	TArray<int32> CBT_Buffer;
-	/*int32 AllocationCounter_Buffer = 0;
-	TArray<FPointer_CBT> Pointer_Buffer;*/
+	int32 AllocationCounter_Buffer = 0;
+	TArray<FPointer_CBT> Pointer_Buffer;
 
 	TSharedPtr<FCBTResource_Interface> CBTResources;
 
