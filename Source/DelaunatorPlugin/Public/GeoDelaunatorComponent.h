@@ -491,6 +491,7 @@ protected:
 
 	TArray<FVector2D> LonLat;
 	TArray<FVector> FibonacciPoints; // BUFFER FOR TRIANGLES VERTICES
+	TArray<double> VoronoiSubdivRadius; // farther voronoi corner for each site, serves as subdiv distance unit
 	TArray<uint32> VoronoiCellColors; // random colors for Voronoi cells, generated on CPU and sent to GPU for rendering
 	TArray<FVector3_HighLow> FibonacciPoints_HL; // HIGH-LOW BUFFER FOR GPU TRIANGLE VERTICES
 	std::vector<double> coords; // FOR DELAUNAYTOR
@@ -522,6 +523,13 @@ protected:
 
 
 	// CBT STRUCTURE
+	
+	// Hop count from ClosestSite (1 = immediate Voronoi neighbors).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0", UIMin = "0", ClampMax = "5", UIMax = "5"), Category = "GeoDelaunator|Pawn")
+	int32 NeighborRingDepth = 2;
+
+	int32 ClosestSite = INDEX_NONE;
+
 	uint32 D{ 16 }; // CBT Depth
 	TArray<FHalfEdge_CBT> HalfEdge_Buffer;
 	TArray<FRootBisector_CBT> RootBisectors_Buffer;
@@ -535,53 +543,6 @@ protected:
 	TAtomic<uint32> PlanetColorDebugShaderValue;
 
 public:
-
-	/*****************************************************************************
-	* BEGIN PLANET RADIUS
-	*****************************************************************************/
-	FORCEINLINE float GetPlanetRadius() const { return (float)PlanetRadius; }
-	FORCEINLINE void SetPlanetRadius(double InPlanetRadius)
-	{
-		PlanetRadius = InPlanetRadius;
-		UpdateBounds();
-		MarkRenderStateDirty();
-	}
-	/*****************************************************************************
-	* END PLANET RADIUS
-	*****************************************************************************/
-
-	/*****************************************************************************
-	* BEGIN PAWN
-	*****************************************************************************/
-	// Planet overlap: actor in the gravity volume, stored as IPawnInterface.
-	IPawnInterface* Pawn = nullptr;
-
-	FORCEINLINE void RegisterPawn(IPawnInterface* InPawn)
-	{
-		Pawn = InPawn;
-		if (Pawn)
-		{
-			StartPawnTimer();
-		}
-	}
-	FORCEINLINE void UnregisterPawn(IPawnInterface* InPawn)
-	{
-		if (Pawn == InPawn)
-		{
-			StopPawnTimer();
-			Pawn = nullptr;
-		}
-	}
-
-	// TIMER GOES HERE
-	FTimerHandle PawnTimerHandle;
-	FORCEINLINE void StartPawnTimer() { GetWorld()->GetTimerManager().SetTimer(PawnTimerHandle, this, &UGeoDelaunatorComponent::PawnTick, 0.1f, true); }
-	FORCEINLINE void StopPawnTimer() { GetWorld()->GetTimerManager().ClearTimer(PawnTimerHandle); }
-	UFUNCTION()
-	void PawnTick();
-	/*****************************************************************************
-	* END PAWN
-	*****************************************************************************/
 
 	FORCEINLINE float GetMaxLandDistance() const { return MaxLandDistance; }
 	FORCEINLINE TSharedPtr<FCBTResource_Interface> GetCBTResources() const { return CBTResources; }
@@ -619,6 +580,17 @@ public:
 		FVector3d Mid = (A + B).GetSafeNormal();
 		if (Mid.Dot(RefCenter) < 0.0) Mid *= -1.0; // ensure same hemisphere
 		return Mid;
+	}
+
+	// Euclidean chord between site and corner on the PlanetRadius sphere.
+	FORCEINLINE void UpdateSubdivRadius(int32 SiteIndex, const FVector& Corner)
+	{
+		if (!FibonacciPoints.IsValidIndex(SiteIndex) || !VoronoiSubdivRadius.IsValidIndex(SiteIndex))
+		{
+			return;
+		}
+		const double Dist = (double)FVector::Dist(FibonacciPoints[SiteIndex], Corner) * PlanetRadius;
+		VoronoiSubdivRadius[SiteIndex] = FMath::Max(VoronoiSubdivRadius[SiteIndex], Dist);
 	}
 
 	// CBT STRUCTURE
@@ -718,6 +690,7 @@ protected:
 
 	void GeneratePlates_RedBlobRandomFill();
 	void GetVoronoiNeighbors(int32 SiteIndex, TArray<int32>& OutNeighbors, TArray<int32>& OutHalfEdgeIndices) const;
+	void CollectVoronoiNeighborRings(int32 StartSite, int32 Depth=2, TArray<int32>& OutRingSites) const;
 	// add fisher-yates shuffle to randomize the order of neighbors and avoid similar plate IDs
 	TArray<int32> PickRandomPlateSeeds(int32 Count, TArray<FPlateData>& OutSeeds);
 	TArray<int32> GetAncestorChain(int32 StartSite) const;
@@ -784,4 +757,54 @@ protected:
 
 	/*void GeneratePlates_NearestNeighbor();
 	void GeneratePlates_NearestNeighbor_DomainWarped();*/
+
+public:
+
+	/*****************************************************************************
+	* BEGIN PLANET RADIUS
+	*****************************************************************************/
+	FORCEINLINE float GetPlanetRadius() const { return (float)PlanetRadius; }
+	FORCEINLINE void SetPlanetRadius(double InPlanetRadius)
+	{
+		PlanetRadius = InPlanetRadius;
+		UpdateBounds();
+		MarkRenderStateDirty();
+	}
+	/*****************************************************************************
+	* END PLANET RADIUS
+	*****************************************************************************/
+
+	/*****************************************************************************
+	* BEGIN PAWN
+	*****************************************************************************/
+	// Planet overlap: actor in the gravity volume, stored as IPawnInterface.
+	IPawnInterface* Pawn = nullptr;
+
+	FORCEINLINE void RegisterPawn(IPawnInterface* InPawn)
+	{
+		Pawn = InPawn;
+		if (Pawn)
+		{
+			StartPawnTimer();
+		}
+	}
+	FORCEINLINE void UnregisterPawn(IPawnInterface* InPawn)
+	{
+		if (Pawn == InPawn)
+		{
+			StopPawnTimer();
+			Pawn = nullptr;
+			ClosestSite = INDEX_NONE;
+		}
+	}
+
+	// TIMER GOES HERE
+	FTimerHandle PawnTimerHandle;
+	FORCEINLINE void StartPawnTimer() { GetWorld()->GetTimerManager().SetTimer(PawnTimerHandle, this, &UGeoDelaunatorComponent::PawnTick, 0.1f, true); }
+	FORCEINLINE void StopPawnTimer() { GetWorld()->GetTimerManager().ClearTimer(PawnTimerHandle); }
+	UFUNCTION()
+	void PawnTick();
+	/*****************************************************************************
+	* END PAWN
+	*****************************************************************************/
 };

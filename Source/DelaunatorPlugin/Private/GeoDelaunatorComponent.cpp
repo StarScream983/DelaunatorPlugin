@@ -275,19 +275,68 @@ void UGeoDelaunatorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void UGeoDelaunatorComponent::PawnTick()
 {
-	if (!Pawn)
+	if (!Pawn || FibonacciPoints.Num() == 0)
+	{
+		ClosestSite = INDEX_NONE;
+		return;
+	}
+
+	const FVector PawnLocal = GetComponentTransform().InverseTransformPosition(Pawn->GetPlanetOverlapLocation());
+	const FVector PawnDir = PawnLocal.GetSafeNormal();
+	if (PawnDir.IsNearlyZero())
 	{
 		return;
 	}
 
-	const FVector PawnLocation = Pawn->GetPlanetOverlapLocation();
-	const FVector PlanetLocation = GetComponentLocation();
-	const float DistanceFromCenter = FVector::Dist(PawnLocation, PlanetLocation);
+	float BestDot = -2.f;
+	int32 BestSite = INDEX_NONE;
+	for (int32 Site = 0; Site < FibonacciPoints.Num(); ++Site)
+	{
+		const float Dot = FVector::DotProduct(PawnDir, FibonacciPoints[Site]);
+		if (Dot > BestDot)
+		{
+			BestDot = Dot;
+			BestSite = Site;
+		}
+	}
+	ClosestSite = BestSite;
+	if (ClosestSite == INDEX_NONE)
+	{
+		return;
+	}
+
+	// Same radial scale as collision / GeoVoronoiIndirectInstancingVertexFactory.ush
+	constexpr float ElevationScale = 0.03f;
+	const float Elev = ElevationPerSite.IsValidIndex(ClosestSite) ? ElevationPerSite[ClosestSite] : 0.0f;
+	const float GroundRadius = (float)PlanetRadius * (1.0f + Elev * ElevationScale);
+	const FVector SiteWorld = GetComponentTransform().TransformPosition(FibonacciPoints[ClosestSite] * GroundRadius);
+
+	const float SubdivRadius = VoronoiSubdivRadius.IsValidIndex(ClosestSite)
+		? FMath::Max(1.f, (float)VoronoiSubdivRadius[ClosestSite])
+		: 40.f;
+	DrawDebugSphere(GetWorld(), SiteWorld, SubdivRadius, 12, FColor::Yellow, false, 0.15f);
+
+	TArray<int32> RingSites;
+	CollectVoronoiNeighborRings(ClosestSite, NeighborRingDepth, RingSites);
+	for (const int32 NeighborSite : RingSites)
+	{
+		if (!FibonacciPoints.IsValidIndex(NeighborSite))
+		{
+			continue;
+		}
+		const float NeighborElev = ElevationPerSite.IsValidIndex(NeighborSite) ? ElevationPerSite[NeighborSite] : 0.0f;
+		const float NeighborRadius = (float)PlanetRadius * (1.0f + NeighborElev * ElevationScale);
+		const FVector NeighborWorld = GetComponentTransform().TransformPosition(FibonacciPoints[NeighborSite] * NeighborRadius);
+		const float NeighborSubdivRadius = VoronoiSubdivRadius.IsValidIndex(NeighborSite)
+			? FMath::Max(1.f, (float)VoronoiSubdivRadius[NeighborSite])
+			: 28.f;
+		DrawDebugSphere(GetWorld(), NeighborWorld, NeighborSubdivRadius, 12, FColor::Blue, false, 0.15f);
+	}
 
 	if (GEngine)
 	{
-		GEngine->AddOnScreenDebugMessage(1, 0.1f, FColor::Cyan,
-			FString::Printf(TEXT("Pawn-planet: center %.1f"), DistanceFromCenter));
+		GEngine->AddOnScreenDebugMessage(1, 0.15f, FColor::Cyan,
+			FString::Printf(TEXT("Closest site %d  dist %.1f"), ClosestSite, PawnLocal.Size()));
 	}
 }
 
@@ -1394,6 +1443,7 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 	SitePrefixSums.Empty();
 	SitePrefixSums.SetNum(NumSites);
 	SitePrefixSums[0] = 0;
+	VoronoiSubdivRadius.Init(0.0, NumSites);
 
 	// --- STEP 2: Reorder each polygon CCW using neighbors ---
 	for (int32 s = 0; s < NumSites; ++s)
@@ -1407,6 +1457,12 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 		// Start with the first triple
 		OrderedTris.Add(Poly[0].Get<2>()); // triangle index
 		int32 k = Poly[0].Get<1>();        // next B = C of first triple
+
+		// BEGIN SUBDIV RADIUS FOR FIRST CORNER IN THE POLY RING
+		if (Circumcenters.IsValidIndex(Poly[0].Get<2>()))
+		{
+			UpdateSubdivRadius(s, Circumcenters[Poly[0].Get<2>()]); // first voronoi corner in the poly ring
+		}
 
 		int32 _VHE_Start = Poly[0].Get<2>();     // Triangle index = circumcenter index
 		const int32 _Start_Face = s;             // The site this polygon belongs to
@@ -1423,6 +1479,13 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 					const int32 _End_Face = k;             // The site the twin half-edge belongs to
 					VoronoiHalfEdges_Map[s].Add(FVoronoiHalfEdge(_VHE_Start, _VHE_End, _Start_Face, _End_Face));
 					_VHE_Start = _VHE_End;
+
+					
+					// FOLLOW-UP SUBDIV RADIUS FOR FOLLOW-UP CORNERS IN THE POLY RING
+					if (Circumcenters.IsValidIndex(_VHE_End))
+					{
+						UpdateSubdivRadius(s, Circumcenters[_VHE_End]); // follow-up the voronoi corners in the poly ring
+					}
 
 					// VORONOI HALF-EDGE BUILDING -- FIL's CODE
 					k = Entry.Get<1>();
@@ -1466,6 +1529,10 @@ FGeoPolygonResult UGeoDelaunatorComponent::Geo_Polygons(TArray<FVector>& Circumc
 
 			Result.Centers_HL.Add(FVector3_HighLow(R0));
 			Result.Centers_HL.Add(FVector3_HighLow(R1));
+
+			// UPDATE SUBDIV RADIUS FOR THE DEGENERATE CASE
+			UpdateSubdivRadius(s, FVector(R0));
+			UpdateSubdivRadius(s, FVector(R1));
 
 			// Final polygon is 4-point pseudo-loop: [C0, R1, C1, R0]
 			TArray<int32> FakePoly = { OrderedTris[0], i1, OrderedTris[1], i0 };
@@ -1587,6 +1654,44 @@ void UGeoDelaunatorComponent::GetVoronoiNeighbors(
 		{
 			OutNeighbors.Add(Ring[i].End_Face);
 			OutHalfEdgeIndices.Add(Base + i);
+		}
+	}
+}
+
+void UGeoDelaunatorComponent::CollectVoronoiNeighborRings(int32 StartSite, int32 Depth, TArray<int32>& OutRingSites) const
+{
+	OutRingSites.Reset();
+	if (!FibonacciPoints.IsValidIndex(StartSite) || Depth < 1)
+	{
+		return;
+	}
+
+	TMap<int32, int32> DistFromStart;
+	DistFromStart.Add(StartSite, 0);
+
+	TQueue<int32> Queue;
+	Queue.Enqueue(StartSite);
+
+	int32 Current = INDEX_NONE;
+	while (Queue.Dequeue(Current))
+	{
+		const int32 CurrentDist = DistFromStart.FindChecked(Current);
+		if (CurrentDist >= Depth || !VoronoiHalfEdges_Map.IsValidIndex(Current))
+		{
+			continue;
+		}
+
+		const TArray<FVoronoiHalfEdge>& Ring = VoronoiHalfEdges_Map[Current];
+		for (const FVoronoiHalfEdge& HalfEdge : Ring)
+		{
+			const int32 Neighbor = HalfEdge.End_Face;
+			if (Neighbor < 0 || DistFromStart.Contains(Neighbor))
+			{
+				continue;
+			}
+			DistFromStart.Add(Neighbor, CurrentDist + 1);
+			Queue.Enqueue(Neighbor);
+			OutRingSites.Add(Neighbor);
 		}
 	}
 }
