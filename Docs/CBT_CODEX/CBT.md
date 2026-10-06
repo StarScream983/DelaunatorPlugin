@@ -44,3 +44,10 @@ The former integer allows us to make sure splits and/or merges are only evaluate
 - a  2^{D}  buffer of  (\x 2)  integers per element, which caches the results of Algorithms 7 and 8.
 
 We further detail the purpose of each of these attributes in the following paragraphs.
+
+## CBT_Buffer (size 2^{D+1})
+
+- `[0 … 2^D − 1]` — sum-reduction tree. `CBT[0]` unused. `CBT[k] = CBT[2k] + CBT[2k+1]`. `CBT[1]` = number of live bisectors. Used to find the k-th occupied slot (Alg. 7) or a free slot (Alg. 8) in O(D).
+- `[2^D … 2^{D+1} − 1]` — bitfield, one bit per pool slot. `1` = occupied, `0` = free. Not split/merge (that is `BisectorCommand` / `j`).
+
+On a bit flip: set the leaf, then only the path to `CBT[1]`. Full reduce is init only.

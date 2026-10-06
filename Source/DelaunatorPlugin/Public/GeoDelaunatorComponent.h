@@ -491,6 +491,7 @@ protected:
 
 	TArray<FVector2D> LonLat;
 	TArray<FVector> FibonacciPoints; // BUFFER FOR TRIANGLES VERTICES
+	float VoronoiSubdivRadiusMultiplier = 1.2f; // scales site chord into the yellow unit sphere
 	TArray<double> VoronoiSubdivRadius; // farther voronoi corner for each site, serves as subdiv distance unit
 	TArray<uint32> VoronoiCellColors; // random colors for Voronoi cells, generated on CPU and sent to GPU for rendering
 	TArray<FVector3_HighLow> FibonacciPoints_HL; // HIGH-LOW BUFFER FOR GPU TRIANGLE VERTICES
@@ -543,7 +544,7 @@ protected:
 	TAtomic<uint32> PlanetColorDebugShaderValue;
 
 	// Sequential CPU split (paper §2 Algorithms 3–5). Pool index, not BisectorID.
-	void RefineBisector(int32 PoolIndex, int32 RecursionDepth = 0);
+	void RefineBisector(int32 PoolIndex, int32 RecursionDepth = 0, int32 DepthCap = 5);
 	void SplitBisector(int32 PoolIndexJ, int32 PoolIndexK);
 	void RefineBisectorPointers(int32 ParentPool, int32 EvenPool, int32 OddPool);
 	int32 AllocateBisectorSlot();

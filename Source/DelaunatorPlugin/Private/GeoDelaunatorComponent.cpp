@@ -314,7 +314,22 @@ void UGeoDelaunatorComponent::PawnTick()
 	const float SubdivRadius = VoronoiSubdivRadius.IsValidIndex(ClosestSite)
 		? FMath::Max(1.f, (float)VoronoiSubdivRadius[ClosestSite])
 		: 40.f;
-	DrawDebugSphere(GetWorld(), SiteWorld, SubdivRadius, 12, FColor::Yellow, false, 0.15f);
+	const float UnitVoronoiSubdivRadius = SubdivRadius * VoronoiSubdivRadiusMultiplier;
+	const float TriggerRadius = UnitVoronoiSubdivRadius * 5.f;
+	DrawDebugSphere(GetWorld(), SiteWorld, UnitVoronoiSubdivRadius, 12, FColor::Yellow, false, 0.15f);
+	DrawDebugSphere(GetWorld(), SiteWorld, TriggerRadius, 16, FColor::Orange, false, 0.15f);
+
+	// World distance to the sphere center (same space as DrawDebugSphere).
+	const FVector PawnWorld = Pawn->GetPlanetOverlapLocation();
+	const float PawnToSite = FVector::Dist(PawnWorld, SiteWorld);
+	const bool bInsideTrigger = PawnToSite <= TriggerRadius;
+	// 5 bands of 1× UnitVoronoiSubdivRadius: enter at 5× → depth 1, inside yellow 1× → depth 5.
+	int32 TargetDepth = 0;
+	if (bInsideTrigger)
+	{
+		const int32 BandFromOutside = FMath::Clamp(FMath::CeilToInt(PawnToSite / UnitVoronoiSubdivRadius) - 1, 0, 4);
+		TargetDepth = 5 - BandFromOutside;
+	}
 
 	TArray<int32> RingSites;
 	CollectVoronoiNeighborRings(ClosestSite, NeighborRingDepth, RingSites);
@@ -333,37 +348,85 @@ void UGeoDelaunatorComponent::PawnTick()
 		DrawDebugSphere(GetWorld(), NeighborWorld, NeighborSubdivRadius, 12, FColor::Blue, false, 0.15f);
 	}
 
-	if (SitePrefixSums.IsValidIndex(ClosestSite) && VoronoiHalfEdges_Map.IsValidIndex(ClosestSite))
+	if (bInsideTrigger && TargetDepth > 0 && SitePrefixSums.IsValidIndex(ClosestSite) && VoronoiHalfEdges_Map.IsValidIndex(ClosestSite))
 	{
 		const int32 Begin = SitePrefixSums[ClosestSite];
 		const int32 Count = VoronoiHalfEdges_Map[ClosestSite].Num();
-		for (int32 v = 0; v < Count; ++v)
+		const int32 EndHe = Begin + Count;
+
+		auto BisectorDepth = [](uint64 J) -> int32
 		{
-			const int32 PoolIndex = Begin + v;
-			if (IsLiveBisector(PoolIndex) && RootBisectors_Buffer[PoolIndex].BisectorID == 1)
+			int32 Depth = 0;
+			while (J > 1ull && Depth < 63)
 			{
-				RefineBisector(PoolIndex);
+				J >>= 1;
+				++Depth;
 			}
-		}
-		for (int32 v = 0; v < Count; ++v)
+			return Depth;
+		};
+		auto RootHeOf = [this](int32 PoolIndex) -> int32
 		{
-			const int32 EvenPool = Begin + v;
-			DrawBisectorDebug(EvenPool, EvenPool, GroundRadius);
-			if (IsLiveBisector(EvenPool))
+			// Child1 = input half-edge for Alg. 1 (roots set at init, odds copy the parent).
+			const int32 Cached = RootBisectors_Buffer[PoolIndex].Child1;
+			return Cached != INVALID_POINTER ? Cached : PoolIndex;
+		};
+
+		// Catch up to TargetDepth this tick: one paper generation per loop (Command reset), until all site leaves are at cap or the pool is full.
+		for (int32 Generation = 0; Generation < TargetDepth; ++Generation)
+		{
+			for (int32 PoolIndex = 0; PoolIndex < AllocationCounter_Buffer; ++PoolIndex)
 			{
-				const int32 OddPool = RootBisectors_Buffer[EvenPool].Child0;
-				if (OddPool != INVALID_POINTER)
+				if (IsLiveBisector(PoolIndex))
 				{
-					DrawBisectorDebug(OddPool, EvenPool, GroundRadius);
+					RootBisectors_Buffer[PoolIndex].BisectorCommand = CBT_CMD_KEEP;
 				}
 			}
+
+			bool bNeedsSplit = false;
+			const int32 LiveCount = AllocationCounter_Buffer;
+			for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+			{
+				if (!IsLiveBisector(PoolIndex))
+				{
+					continue;
+				}
+				const int32 RootHe = RootHeOf(PoolIndex);
+				if (RootHe < Begin || RootHe >= EndHe)
+				{
+					continue;
+				}
+				if (BisectorDepth(RootBisectors_Buffer[PoolIndex].BisectorID) < TargetDepth)
+				{
+					bNeedsSplit = true;
+					RefineBisector(PoolIndex, 0, TargetDepth);
+				}
+			}
+			if (!bNeedsSplit)
+			{
+				break;
+			}
+		}
+
+		for (int32 PoolIndex = 0; PoolIndex < AllocationCounter_Buffer; ++PoolIndex)
+		{
+			if (!IsLiveBisector(PoolIndex))
+			{
+				continue;
+			}
+			const int32 RootHe = RootHeOf(PoolIndex);
+			if (RootHe < Begin || RootHe >= EndHe)
+			{
+				continue;
+			}
+			DrawBisectorDebug(PoolIndex, RootHe, GroundRadius);
 		}
 	}
 
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(1, 0.15f, FColor::Cyan,
-			FString::Printf(TEXT("Closest site %d  dist %.1f  alloc %d"), ClosestSite, PawnLocal.Size(), AllocationCounter_Buffer));
+			FString::Printf(TEXT("Closest site %d  pawnToSite %.1f / 5x %.1f  depth %d  alloc %d"),
+				ClosestSite, PawnToSite, TriggerRadius, TargetDepth, AllocationCounter_Buffer));
 	}
 }
 
@@ -441,13 +504,29 @@ void UGeoDelaunatorComponent::RefineBisectorPointers(int32 ParentPool, int32 Eve
 	}
 }
 
-void UGeoDelaunatorComponent::RefineBisector(int32 PoolIndex, int32 RecursionDepth)
+void UGeoDelaunatorComponent::RefineBisector(int32 PoolIndex, int32 RecursionDepth, int32 DepthCap)
 {
 	if (RecursionDepth > 16 || !IsLiveBisector(PoolIndex))
 	{
 		return;
 	}
-	if (RootBisectors_Buffer[PoolIndex].Child0 != INVALID_POINTER)
+	if (RootBisectors_Buffer[PoolIndex].BisectorCommand != CBT_CMD_KEEP)
+	{
+		return;
+	}
+
+	auto BisectorDepth = [](uint64 J) -> int32
+	{
+		int32 Depth = 0;
+		while (J > 1ull && Depth < 63)
+		{
+			J >>= 1;
+			++Depth;
+		}
+		return Depth;
+	};
+	const int32 MyDepth = BisectorDepth(RootBisectors_Buffer[PoolIndex].BisectorID);
+	if (MyDepth >= DepthCap)
 	{
 		return;
 	}
@@ -457,16 +536,38 @@ void UGeoDelaunatorComponent::RefineBisector(int32 PoolIndex, int32 RecursionDep
 	{
 		if (RootBisectors_Buffer[TwinIdx].Twin != PoolIndex)
 		{
-			RefineBisector(TwinIdx, RecursionDepth + 1);
+			RefineBisector(TwinIdx, RecursionDepth + 1, DepthCap);
 		}
-		if (RootBisectors_Buffer[PoolIndex].Child0 != INVALID_POINTER)
+		if (RootBisectors_Buffer[PoolIndex].BisectorCommand != CBT_CMD_KEEP || !IsLiveBisector(PoolIndex))
 		{
 			return;
 		}
 		int32 Partner = RootBisectors_Buffer[PoolIndex].Twin;
-		if (!IsLiveBisector(Partner) || RootBisectors_Buffer[Partner].Child0 != INVALID_POINTER)
+		if (!IsLiveBisector(Partner) || RootBisectors_Buffer[Partner].BisectorCommand != CBT_CMD_KEEP)
 		{
 			Partner = INDEX_NONE;
+		}
+		else
+		{
+			const int32 PartnerDepth = BisectorDepth(RootBisectors_Buffer[Partner].BisectorID);
+			if (PartnerDepth < MyDepth)
+			{
+				RefineBisector(Partner, RecursionDepth + 1, DepthCap);
+				if (RootBisectors_Buffer[PoolIndex].BisectorCommand != CBT_CMD_KEEP || !IsLiveBisector(PoolIndex))
+				{
+					return;
+				}
+				Partner = RootBisectors_Buffer[PoolIndex].Twin;
+				if (!IsLiveBisector(Partner) || RootBisectors_Buffer[Partner].BisectorCommand != CBT_CMD_KEEP
+					|| BisectorDepth(RootBisectors_Buffer[Partner].BisectorID) != MyDepth)
+				{
+					Partner = INDEX_NONE;
+				}
+			}
+			else if (PartnerDepth > MyDepth)
+			{
+				Partner = INDEX_NONE;
+			}
 		}
 		SplitBisector(PoolIndex, Partner);
 	}
@@ -478,7 +579,7 @@ void UGeoDelaunatorComponent::RefineBisector(int32 PoolIndex, int32 RecursionDep
 
 void UGeoDelaunatorComponent::SplitBisector(int32 PoolIndexJ, int32 PoolIndexK)
 {
-	if (!IsLiveBisector(PoolIndexJ) || RootBisectors_Buffer[PoolIndexJ].Child0 != INVALID_POINTER)
+	if (!IsLiveBisector(PoolIndexJ) || RootBisectors_Buffer[PoolIndexJ].BisectorCommand != CBT_CMD_KEEP)
 	{
 		return;
 	}
@@ -489,7 +590,7 @@ void UGeoDelaunatorComponent::SplitBisector(int32 PoolIndexJ, int32 PoolIndexK)
 
 	const bool bHasTwin = IsLiveBisector(PoolIndexK)
 		&& PoolIndexK != PoolIndexJ
-		&& RootBisectors_Buffer[PoolIndexK].Child0 == INVALID_POINTER;
+		&& RootBisectors_Buffer[PoolIndexK].BisectorCommand == CBT_CMD_KEEP;
 	if (bHasTwin && RootBisectors_Buffer[PoolIndexK].BisectorID > (MAX_uint64 >> 1))
 	{
 		return;
@@ -531,12 +632,21 @@ void UGeoDelaunatorComponent::SplitBisector(int32 PoolIndexJ, int32 PoolIndexK)
 		RefineBisectorPointers(PoolIndexK, PoolIndexK, OddK);
 	}
 
-	// Table 1 — children of b_j (even stays in PoolIndexJ).
+	const int32 RootHeJ = RootBisectors_Buffer[PoolIndexJ].Child1 != INVALID_POINTER
+		? RootBisectors_Buffer[PoolIndexJ].Child1
+		: PoolIndexJ;
+	const int32 RootHeK = bHasTwin
+		? (RootBisectors_Buffer[PoolIndexK].Child1 != INVALID_POINTER
+			? RootBisectors_Buffer[PoolIndexK].Child1
+			: PoolIndexK)
+		: INVALID_POINTER;
+
+	// Table 1 — children of b_j (even stays in PoolIndexJ). Child1 stays the input HE.
 	RootBisectors_Buffer[PoolIndexJ].BisectorID = OldJ * 2;
 	RootBisectors_Buffer[PoolIndexJ].Next = OddJ;
 	RootBisectors_Buffer[PoolIndexJ].Prev = bHasTwin ? OddK : INVALID_POINTER;
 	RootBisectors_Buffer[PoolIndexJ].Twin = OldPrevJ;
-	RootBisectors_Buffer[PoolIndexJ].BisectorCommand = CBT_CMD_KEEP;
+	RootBisectors_Buffer[PoolIndexJ].BisectorCommand = CBT_CMD_SPLIT_EDGE0;
 	RootBisectors_Buffer[PoolIndexJ].Child0 = OddJ;
 
 	FRootBisector_CBT OddJBisector;
@@ -544,9 +654,9 @@ void UGeoDelaunatorComponent::SplitBisector(int32 PoolIndexJ, int32 PoolIndexK)
 	OddJBisector.Next = bHasTwin ? PoolIndexK : INVALID_POINTER;
 	OddJBisector.Prev = PoolIndexJ;
 	OddJBisector.Twin = OldNextJ;
-	OddJBisector.BisectorCommand = CBT_CMD_KEEP;
+	OddJBisector.BisectorCommand = CBT_CMD_SPLIT_EDGE0;
 	OddJBisector.Child0 = INVALID_POINTER;
-	OddJBisector.Child1 = INVALID_POINTER;
+	OddJBisector.Child1 = RootHeJ;
 	OddJBisector.Child2 = INVALID_POINTER;
 	OddJBisector.Child3 = INVALID_POINTER;
 	RootBisectors_Buffer[OddJ] = OddJBisector;
@@ -557,7 +667,7 @@ void UGeoDelaunatorComponent::SplitBisector(int32 PoolIndexJ, int32 PoolIndexK)
 		RootBisectors_Buffer[PoolIndexK].Next = OddK;
 		RootBisectors_Buffer[PoolIndexK].Prev = OddJ;
 		RootBisectors_Buffer[PoolIndexK].Twin = OldPrevK;
-		RootBisectors_Buffer[PoolIndexK].BisectorCommand = CBT_CMD_KEEP;
+		RootBisectors_Buffer[PoolIndexK].BisectorCommand = CBT_CMD_SPLIT_EDGE0;
 		RootBisectors_Buffer[PoolIndexK].Child0 = OddK;
 
 		FRootBisector_CBT OddKBisector;
@@ -565,9 +675,9 @@ void UGeoDelaunatorComponent::SplitBisector(int32 PoolIndexJ, int32 PoolIndexK)
 		OddKBisector.Next = PoolIndexJ;
 		OddKBisector.Prev = PoolIndexK;
 		OddKBisector.Twin = OldNextK;
-		OddKBisector.BisectorCommand = CBT_CMD_KEEP;
+		OddKBisector.BisectorCommand = CBT_CMD_SPLIT_EDGE0;
 		OddKBisector.Child0 = INVALID_POINTER;
-		OddKBisector.Child1 = INVALID_POINTER;
+		OddKBisector.Child1 = RootHeK;
 		OddKBisector.Child2 = INVALID_POINTER;
 		OddKBisector.Child3 = INVALID_POINTER;
 		RootBisectors_Buffer[OddK] = OddKBisector;
@@ -1569,24 +1679,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	CBT_Buffer.Empty();
 	CBT_Buffer.SetNumZeroed(2 * NumLeaves);           // all bits = 0
 
-	// Set the first H leaves (root bisectors) to 1, and calculating the sum reduction tree
-	/*for (int32 h = 0; h < NumLeaves; ++h)
-	{
-		if (CBT_Buffer.IsValidIndex(NumLeaves + h)) 
-		{
-			if (h < NumRootBisectors)CBT_Buffer[NumLeaves + h] = 1;
-		}
-		const int32 Reverse_h = NumLeaves - 1 - h;
-		const int32 Reverse_Double_h = 2 * Reverse_h; // 2k node index => child of k node index
-		const int32 Node_2k = (Reverse_Double_h >= NumLeaves) ? ((Reverse_Double_h >= NumLeaves + NumRootBisectors) ? 1 : 0) : CBT_Buffer[Reverse_Double_h]; // 2k child node value
-		const int32 Node_2kplus1 = (Reverse_Double_h + 1 >= NumLeaves) ? ((Reverse_Double_h+1 >= NumLeaves + NumRootBisectors) ? 1 : 0) : CBT_Buffer[Reverse_Double_h + 1]; // 2k+1 child node value
-		CBT_Buffer[Reverse_h] =  Node_2k + Node_2kplus1;
-
-		//if (Node_2k + Node_2kplus1>0) UE_LOG(LogTemp, Warning, TEXT("SUM ID: %d || SUM: %d"), Reverse_h, Node_2k + Node_2kplus1); // LOG INDICES WHICH SUM IS HIGHER THAN 0
-		
-	}*/
-
-	for (int32 h = 0; h < NumRootBisectors; ++h)
+	for (int32 h = 0; h < NumRootBisectors; ++h) // this first loop can be embedded at the same level of HalfEdge_Buffer/RootBisectors_Buffer construction
 	{
 		CBT_Buffer[NumLeaves + h] = 1;
 	}
@@ -1596,6 +1689,10 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	}
 
 	AllocationCounter_Buffer = NumRootBisectors;
+	for (int32 h = 0; h < NumRootBisectors; ++h)
+	{
+		RootBisectors_Buffer[h].Child1 = h; // input half-edge for Alg. 1
+	}
 	FPointer_CBT InvalidPointer;
 	InvalidPointer.IndexBuffer = INVALID_POINTER;
 	InvalidPointer.AvailabeBlock = INVALID_POINTER;
