@@ -319,7 +319,7 @@ void UGeoDelaunatorComponent::PawnTick()
 		? FMath::Max(1.f, (float)VoronoiSubdivRadius[ClosestSite])
 		: 40.f;
 	const float UnitVoronoiSubdivRadius = SubdivRadius * VoronoiSubdivRadiusMultiplier;
-	const float TriggerRadius = UnitVoronoiSubdivRadius * 5.f;
+	const float TriggerRadius = UnitVoronoiSubdivRadius * SubdivTriggerMultiplier;
 	DrawDebugSphere(GetWorld(), SiteWorldPos, UnitVoronoiSubdivRadius, 12, FColor::Yellow, false, 0.15f);
 	DrawDebugSphere(GetWorld(), SiteWorldPos, TriggerRadius, 16, FColor::Orange, false, 0.15f);
 
@@ -328,13 +328,13 @@ void UGeoDelaunatorComponent::PawnTick()
 	const float PawnToSiteDist = FVector::Dist(PawnWorldPosition, SiteWorldPos);
 	const bool bInsideTrigger = PawnToSiteDist <= TriggerRadius;
 
-	// Calculate and subdiv depth
-	// 5 bands of 1× UnitVoronoiSubdivRadius: enter at 5× → depth 1, inside yellow 1× → depth 5.
-	int32 SubdivDepth = 0;
-	if (bInsideTrigger)
+	// Trigger is SubdivDepth equal bands. Outer band → depth 1, innermost → SubdivDepth.
+	int32 TargetSubdivDepth = 0;
+	if (bInsideTrigger && SubdivDepth > 0)
 	{
-		const int32 DistBandFromOutside = FMath::Clamp(FMath::CeilToInt(PawnToSiteDist / UnitVoronoiSubdivRadius) - 1, 0, 4);
-		SubdivDepth = 5 - DistBandFromOutside;
+		const float BandWidth = TriggerRadius / (float)SubdivDepth;
+		const int32 DistBandFromOutside = FMath::Clamp(FMath::CeilToInt(PawnToSiteDist / BandWidth) - 1, 0, SubdivDepth - 1);
+		TargetSubdivDepth = SubdivDepth - DistBandFromOutside;
 	}
 
 	// Collect the Voronoi neighbor rings
@@ -359,24 +359,62 @@ void UGeoDelaunatorComponent::PawnTick()
 	//================================================================================//
 	// CBT STARTS HERE
 	//================================================================================//
-	if (bInsideTrigger && SubdivDepth > 0 && SitePrefixSums.IsValidIndex(ClosestSite) && VoronoiHalfEdges_Map.IsValidIndex(ClosestSite))
+	if (SitePrefixSums.IsValidIndex(ClosestSite) && VoronoiHalfEdges_Map.IsValidIndex(ClosestSite))
 	{
 		// Root half-edge range of the closest site. Paper Algorithm 2 recovers this from BisectorID.
 		const int32 BeginHe = SitePrefixSums[ClosestSite];
 		const int32 HeCount = VoronoiHalfEdges_Map[ClosestSite].Num();
 		const int32 EndHe = BeginHe + HeCount;
 
-		// One paper update per generation (§3.3): reset, command, reserve, fill. Repeat until the site reaches SubdivDepth.
-		for (int32 Generation = 0; Generation < SubdivDepth; ++Generation)
+		// Left the previous cell: merge it and its ring (twin leftovers) so those slots can split the new closest site.
+		if (LastClosestSite != INDEX_NONE && LastClosestSite != ClosestSite)
 		{
-			ResetBisectorUpdateFields();
-			// goes through all bisectors and marks them for split if they are shallower than SubdivDepth, needs to be parallelized
-			GenerateSplitCommands(BeginHe, EndHe, SubdivDepth);
-			ReserveSplitBlocks(); 
-			FillSplitBlocks(BeginHe, EndHe);
+			TArray<int32> CollapseSites;
+			CollapseSites.Add(LastClosestSite);
+			TArray<int32> LastRings;
+			CollectVoronoiNeighborRings(LastClosestSite, NeighborRingDepth, LastRings);
+			for (const int32 NeighborSite : LastRings)
+			{
+				if (NeighborSite != ClosestSite)
+				{
+					CollapseSites.Add(NeighborSite);
+				}
+			}
+			for (int32 Generation = 0; Generation < SubdivDepth; ++Generation)
+			{
+				ResetBisectorUpdateFields();
+				for (const int32 SiteIndex : CollapseSites)
+				{
+					if (!SitePrefixSums.IsValidIndex(SiteIndex) || !VoronoiHalfEdges_Map.IsValidIndex(SiteIndex))
+					{
+						continue;
+					}
+					const int32 CollapseBegin = SitePrefixSums[SiteIndex];
+					const int32 CollapseEnd = CollapseBegin + VoronoiHalfEdges_Map[SiteIndex].Num();
+					GenerateMergeCommands(CollapseBegin, CollapseEnd, 0);
+				}
+				FillMergeBlocks(0, MAX_int32);
+			}
 		}
 
-		for (int32 PoolIndex = 0; PoolIndex < AllocationCounter_Buffer; ++PoolIndex)
+		if (bInsideTrigger && TargetSubdivDepth > 0)
+		{
+			// One paper update per generation (§3.3): reset, command, reserve, fill. Repeat until the site reaches TargetSubdivDepth.
+			for (int32 Generation = 0; Generation < TargetSubdivDepth; ++Generation)
+			{
+				ResetBisectorUpdateFields();
+				// goes through all bisectors and marks them for split if they are shallower than TargetSubdivDepth, needs to be parallelized
+				GenerateSplitCommands(BeginHe, EndHe, TargetSubdivDepth);
+				ReserveSplitBlocks(); 
+				FillSplitBlocks(BeginHe, EndHe);
+			}
+		}
+
+		// Same bands in reverse: anything deeper than this site's band merges one level per generation.
+		MergeSiteToDepth(ClosestSite, bInsideTrigger ? TargetSubdivDepth : 0);
+
+		const int32 PoolSize = RootBisectors_Buffer.Num();
+		for (int32 PoolIndex = 0; PoolIndex < PoolSize; ++PoolIndex)
 		{
 			if (!IsLiveBisector(PoolIndex))
 			{
@@ -390,12 +428,13 @@ void UGeoDelaunatorComponent::PawnTick()
 			DrawBisectorDebug(PoolIndex, RootHe, GroundRadius);
 		}
 	}
+	LastClosestSite = ClosestSite;
 
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(1, 0.15f, FColor::Cyan,
-			FString::Printf(TEXT("Closest site %d  pawnToSite %.1f / 5x %.1f  depth %d  alloc %d"),
-				ClosestSite, PawnToSiteDist, TriggerRadius, SubdivDepth, AllocationCounter_Buffer));
+			FString::Printf(TEXT("Closest site %d  pawnToSite %.1f / trigger %.1f  depth %d / %d  alloc %d"),
+				ClosestSite, PawnToSiteDist, TriggerRadius, TargetSubdivDepth, SubdivDepth, AllocationCounter_Buffer));
 	}
 }
 
@@ -428,7 +467,8 @@ int32 UGeoDelaunatorComponent::RootHalfEdgeFromBisectorID(uint64 BisectorID) con
 void UGeoDelaunatorComponent::ResetBisectorUpdateFields()
 {
 	// Paper kernel ResetCommands. Child0–3 are this update's reserved slots, not permanent child pointers.
-	for (int32 PoolIndex = 0; PoolIndex < AllocationCounter_Buffer; ++PoolIndex)
+	const int32 PoolSize = RootBisectors_Buffer.Num();
+	for (int32 PoolIndex = 0; PoolIndex < PoolSize; ++PoolIndex)
 	{
 		if (!RootBisectors_Buffer.IsValidIndex(PoolIndex))
 		{
@@ -445,7 +485,7 @@ void UGeoDelaunatorComponent::ResetBisectorUpdateFields()
 
 void UGeoDelaunatorComponent::GenerateSplitCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth)
 {
-	const int32 LiveCount = AllocationCounter_Buffer;
+	const int32 LiveCount = RootBisectors_Buffer.Num();
 	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
 	{
 		if (!IsLiveBisector(PoolIndex))
@@ -481,7 +521,7 @@ void UGeoDelaunatorComponent::GenerateSplitCommands(int32 Begin, int32 EndHe, in
 void UGeoDelaunatorComponent::ReserveSplitBlocks()
 {
 	// Snapshot: AllocateBisectorSlot advances AllocationCounter. New slots are not commanded.
-	const int32 LiveCount = AllocationCounter_Buffer;
+	const int32 LiveCount = RootBisectors_Buffer.Num();
 	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
 	{
 		if (!IsLiveBisector(PoolIndex))
@@ -511,7 +551,7 @@ void UGeoDelaunatorComponent::FillSplitBlocks(int32 Begin, int32 EndHe)
 	// Only this site's ring drives the update, in pool order. Pool order is the half-edge ring order.
 	// The twin is split inside the pair. Driving from the twin as well reorders the ring and breaks Table 1.
 	TArray<int32> Order;
-	const int32 LiveCount = AllocationCounter_Buffer;
+	const int32 LiveCount = RootBisectors_Buffer.Num();
 	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
 	{
 		if (!IsLiveBisector(PoolIndex))
@@ -559,16 +599,285 @@ void UGeoDelaunatorComponent::FillSplitBlocks(int32 Begin, int32 EndHe)
 	}
 }
 
+void UGeoDelaunatorComponent::GenerateMergeCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth)
+{
+	const int32 LiveCount = RootBisectors_Buffer.Num();
+	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+	{
+		if (!IsLiveBisector(PoolIndex))
+		{
+			continue;
+		}
+		FRootBisector_CBT& Bisector = RootBisectors_Buffer[PoolIndex];
+		const int32 RootHe = RootHalfEdgeFromBisectorID(Bisector.BisectorID);
+		if (RootHe < Begin || RootHe >= EndHe)
+		{
+			continue;
+		}
+		const int32 MySubdivDepth = BisectorSplitDepth(Bisector.BisectorID);
+		if (MySubdivDepth <= TargetSubdivDepth)
+		{
+			continue;
+		}
+		// Even child is the parent slot. Odd sibling is Next. One merge bit, same role as the paper's merge command.
+		Bisector.BisectorCommand |= CBT_CMD_MERGE_QUAD;
+		const int32 TwinIdx = Bisector.Twin;
+		if (!IsLiveBisector(TwinIdx))
+		{
+			continue;
+		}
+		const int32 TwinSubdivDepth = BisectorSplitDepth(RootBisectors_Buffer[TwinIdx].BisectorID);
+		if (TwinSubdivDepth > TargetSubdivDepth)
+		{
+			RootBisectors_Buffer[TwinIdx].BisectorCommand |= CBT_CMD_MERGE_QUAD;
+		}
+	}
+}
+
+void UGeoDelaunatorComponent::FillMergeBlocks(int32 Begin, int32 EndHe)
+{
+	TArray<int32> Order;
+	const int32 LiveCount = RootBisectors_Buffer.Num();
+	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+	{
+		if (!IsLiveBisector(PoolIndex))
+		{
+			continue;
+		}
+		if ((RootBisectors_Buffer[PoolIndex].BisectorCommand & CBT_CMD_MERGE_QUAD) == 0)
+		{
+			continue;
+		}
+		const uint64 EvenID = RootBisectors_Buffer[PoolIndex].BisectorID;
+		if ((EvenID & 1ull) != 0)
+		{
+			continue; // odd child: the even sibling runs the merge
+		}
+		if (BisectorSplitDepth(EvenID) < 1)
+		{
+			continue;
+		}
+		const int32 OddJ = RootBisectors_Buffer[PoolIndex].Next;
+		if (!IsLiveBisector(OddJ)
+			|| RootBisectors_Buffer[OddJ].BisectorID != EvenID + 1
+			|| RootBisectors_Buffer[OddJ].Prev != PoolIndex)
+		{
+			continue;
+		}
+		Order.Add(PoolIndex);
+	}
+	Order.Sort([this](int32 A, int32 B)
+	{
+		const int32 DepthA = BisectorSplitDepth(RootBisectors_Buffer[A].BisectorID);
+		const int32 DepthB = BisectorSplitDepth(RootBisectors_Buffer[B].BisectorID);
+		if (DepthA != DepthB)
+		{
+			return DepthA > DepthB; // deepest first, one level per generation
+		}
+		return A < B;
+	});
+
+	TArray<int32> Done;
+	for (const int32 PoolIndex : Order)
+	{
+		if (Done.Contains(PoolIndex) || !IsLiveBisector(PoolIndex))
+		{
+			continue;
+		}
+		const int32 OddJ = RootBisectors_Buffer[PoolIndex].Next;
+		MergeBisector(PoolIndex);
+		Done.Add(PoolIndex);
+		if (IsLiveBisector(OddJ))
+		{
+			Done.Add(OddJ);
+		}
+	}
+}
+
+void UGeoDelaunatorComponent::MergeSiteToDepth(int32 SiteIndex, int32 TargetDepth)
+{
+	if (SubdivDepth <= 0 || !SitePrefixSums.IsValidIndex(SiteIndex) || !VoronoiHalfEdges_Map.IsValidIndex(SiteIndex))
+	{
+		return;
+	}
+	const int32 BeginHe = SitePrefixSums[SiteIndex];
+	const int32 EndHe = BeginHe + VoronoiHalfEdges_Map[SiteIndex].Num();
+	for (int32 Generation = 0; Generation < SubdivDepth; ++Generation)
+	{
+		ResetBisectorUpdateFields();
+		GenerateMergeCommands(BeginHe, EndHe, TargetDepth);
+		FillMergeBlocks(BeginHe, EndHe);
+	}
+}
+
+void UGeoDelaunatorComponent::MergeBisector(int32 PoolIndexJ, int32 RecursionDepth)
+{
+	// Inverse of Table 1. Even child occupies the parent slot; odd sibling is Next.
+	if (RecursionDepth > 32 || !IsLiveBisector(PoolIndexJ))
+	{
+		return;
+	}
+	FRootBisector_CBT& EvenJ = RootBisectors_Buffer[PoolIndexJ];
+	const uint64 EvenID = EvenJ.BisectorID;
+	if ((EvenID & 1ull) != 0 || BisectorSplitDepth(EvenID) < 1)
+	{
+		return;
+	}
+	const int32 OddJ = EvenJ.Next;
+	if (!IsLiveBisector(OddJ)
+		|| RootBisectors_Buffer[OddJ].BisectorID != EvenID + 1
+		|| RootBisectors_Buffer[OddJ].Prev != PoolIndexJ)
+	{
+		return;
+	}
+
+	int32 PoolIndexK = RootBisectors_Buffer[OddJ].Next;
+	int32 OddK = EvenJ.Prev;
+	const int32 MyDepth = BisectorSplitDepth(EvenID);
+	if (IsLiveBisector(PoolIndexK) && PoolIndexK != PoolIndexJ)
+	{
+		const int32 TwinDepth = BisectorSplitDepth(RootBisectors_Buffer[PoolIndexK].BisectorID);
+		if (TwinDepth > MyDepth)
+		{
+			MergeBisector(PoolIndexK, RecursionDepth + 1);
+		}
+	}
+	PoolIndexK = RootBisectors_Buffer[OddJ].Next;
+	OddK = EvenJ.Prev;
+
+	const bool bHasTwin = IsLiveBisector(PoolIndexK)
+		&& IsLiveBisector(OddK)
+		&& PoolIndexK != PoolIndexJ
+		&& RootBisectors_Buffer[PoolIndexK].Next == OddK
+		&& RootBisectors_Buffer[OddK].Prev == PoolIndexK
+		&& RootBisectors_Buffer[PoolIndexK].Prev == OddJ
+		&& RootBisectors_Buffer[OddK].Next == PoolIndexJ
+		&& RootBisectors_Buffer[OddK].BisectorID == RootBisectors_Buffer[PoolIndexK].BisectorID + 1
+		&& BisectorSplitDepth(RootBisectors_Buffer[PoolIndexK].BisectorID) == MyDepth;
+	if (!bHasTwin && IsLiveBisector(PoolIndexK))
+	{
+		// Live twin that is not a same-depth pair: wait. Merging this side frees OddJ while the neighbor still points at it.
+		return;
+	}
+
+	auto Redirect = [this](int32 From, int32 To, int32 Old)
+	{
+		if (!IsLiveBisector(From) || From == Old || From == To)
+		{
+			return;
+		}
+		FRootBisector_CBT& B = RootBisectors_Buffer[From];
+		if (B.Next == Old) B.Next = To;
+		if (B.Prev == Old) B.Prev = To;
+		if (B.Twin == Old) B.Twin = To;
+	};
+
+	const int32 OldNextJ = RootBisectors_Buffer[OddJ].Twin;
+	const int32 OldPrevJ = EvenJ.Twin;
+	Redirect(OldNextJ, PoolIndexJ, OddJ);
+	Redirect(OldPrevJ, PoolIndexJ, OddJ);
+
+	int32 OldNextK = INVALID_POINTER;
+	int32 OldPrevK = INVALID_POINTER;
+	if (bHasTwin)
+	{
+		OldNextK = RootBisectors_Buffer[OddK].Twin;
+		OldPrevK = RootBisectors_Buffer[PoolIndexK].Twin;
+		Redirect(OldNextK, PoolIndexK, OddK);
+		Redirect(OldPrevK, PoolIndexK, OddK);
+	}
+
+	EvenJ.BisectorID = EvenID >> 1;
+	EvenJ.Next = OldNextJ;
+	EvenJ.Prev = OldPrevJ;
+	EvenJ.Twin = bHasTwin ? PoolIndexK : RootBisectors_Buffer[OddJ].Next;
+	EvenJ.BisectorCommand = CBT_CMD_KEEP;
+	EvenJ.Child0 = INVALID_POINTER;
+	EvenJ.Child1 = INVALID_POINTER;
+	EvenJ.Child2 = INVALID_POINTER;
+	EvenJ.Child3 = INVALID_POINTER;
+
+	if (bHasTwin)
+	{
+		FRootBisector_CBT& EvenK = RootBisectors_Buffer[PoolIndexK];
+		EvenK.BisectorID = EvenK.BisectorID >> 1;
+		EvenK.Next = OldNextK;
+		EvenK.Prev = OldPrevK;
+		EvenK.Twin = PoolIndexJ;
+		EvenK.BisectorCommand = CBT_CMD_KEEP;
+		EvenK.Child0 = INVALID_POINTER;
+		EvenK.Child1 = INVALID_POINTER;
+		EvenK.Child2 = INVALID_POINTER;
+		EvenK.Child3 = INVALID_POINTER;
+		ReleaseBisectorSlot(OddK);
+	}
+
+	ReleaseBisectorSlot(OddJ);
+}
+
+int32 UGeoDelaunatorComponent::OneToBitID(int32 Index) const
+{
+	// Algorithm 7: i-th bit set to one. Returns the pool slot of that occupied leaf.
+	const int32 NumLeaves = 1 << D;
+	int32 BitID = 1;
+	int32 Remaining = Index;
+	while (BitID < NumLeaves)
+	{
+		BitID = 2 * BitID;
+		if (!CBT_Buffer.IsValidIndex(BitID))
+		{
+			return INDEX_NONE;
+		}
+		if (Remaining >= CBT_Buffer[BitID])
+		{
+			Remaining -= CBT_Buffer[BitID];
+			++BitID;
+		}
+	}
+	return BitID - NumLeaves;
+}
+
+int32 UGeoDelaunatorComponent::ZeroToBitID(int32 Index) const
+{
+	// Algorithm 8: i-th bit set to zero. Returns the pool slot of that free leaf.
+	const int32 NumLeaves = 1 << D;
+	int32 BitID = 1;
+	int32 C = NumLeaves >> 1; // 2^{D-1}: leaf capacity of the current left child
+	int32 Remaining = Index;
+	while (BitID < NumLeaves)
+	{
+		BitID = 2 * BitID;
+		if (!CBT_Buffer.IsValidIndex(BitID))
+		{
+			return INDEX_NONE;
+		}
+		const int32 LeftZeros = C - CBT_Buffer[BitID];
+		if (Remaining >= LeftZeros)
+		{
+			Remaining -= LeftZeros;
+			++BitID;
+		}
+		C >>= 1;
+	}
+	return BitID - NumLeaves;
+}
+
 int32 UGeoDelaunatorComponent::AllocateBisectorSlot()
 {
-	const int32 PoolSize = RootBisectors_Buffer.Num();
-	if (AllocationCounter_Buffer < 0 || AllocationCounter_Buffer >= PoolSize)
+	// Paper malloc: ZeroToBitID(k) then set that bit. Serial update of the sum path, so k is always 0 (first remaining zero).
+	const int32 NumLeaves = 1 << D;
+	if (!CBT_Buffer.IsValidIndex(1) || CBT_Buffer[1] >= NumLeaves)
 	{
 		return INDEX_NONE;
 	}
-	const int32 NewIndex = AllocationCounter_Buffer++; // receive current AllocationCounter_Buffer as child slot then increment for next child.
-	OccupyCbtPoolSlot(NewIndex);
-	return NewIndex;
+	const int32 Slot = ZeroToBitID(0);
+	if (Slot < 0 || Slot >= NumLeaves || !RootBisectors_Buffer.IsValidIndex(Slot))
+	{
+		return INDEX_NONE;
+	}
+	OccupyCbtPoolSlot(Slot);
+	AllocationCounter_Buffer = CBT_Buffer[1];
+	return Slot;
 }
 
 void UGeoDelaunatorComponent::OccupyCbtPoolSlot(int32 PoolIndex)
@@ -591,6 +900,52 @@ void UGeoDelaunatorComponent::OccupyCbtPoolSlot(int32 PoolIndex)
 			break;
 		}
 		CBT_Buffer[Node] = CBT_Buffer[Left] + CBT_Buffer[Right]; // sum of the left and right children
+	}
+}
+
+void UGeoDelaunatorComponent::FreeCbtPoolSlot(int32 PoolIndex)
+{
+	const int32 NumLeaves = 1 << D;
+	const int32 HeapIdx = NumLeaves + PoolIndex;
+	if (!CBT_Buffer.IsValidIndex(HeapIdx))
+	{
+		return;
+	}
+	CBT_Buffer[HeapIdx] = 0;
+	int32 Node = HeapIdx;
+	while (Node > 1)
+	{
+		Node >>= 1;
+		const int32 Left = 2 * Node;
+		const int32 Right = Left + 1;
+		if (!CBT_Buffer.IsValidIndex(Right))
+		{
+			break;
+		}
+		CBT_Buffer[Node] = CBT_Buffer[Left] + CBT_Buffer[Right];
+	}
+}
+
+void UGeoDelaunatorComponent::ReleaseBisectorSlot(int32 PoolIndex)
+{
+	if (!RootBisectors_Buffer.IsValidIndex(PoolIndex) || RootBisectors_Buffer[PoolIndex].BisectorID == 0)
+	{
+		return;
+	}
+	FRootBisector_CBT& Slot = RootBisectors_Buffer[PoolIndex];
+	Slot.BisectorID = 0;
+	Slot.Twin = INVALID_POINTER;
+	Slot.Next = INVALID_POINTER;
+	Slot.Prev = INVALID_POINTER;
+	Slot.BisectorCommand = CBT_CMD_KEEP;
+	Slot.Child0 = INVALID_POINTER;
+	Slot.Child1 = INVALID_POINTER;
+	Slot.Child2 = INVALID_POINTER;
+	Slot.Child3 = INVALID_POINTER;
+	FreeCbtPoolSlot(PoolIndex);
+	if (CBT_Buffer.IsValidIndex(1))
+	{
+		AllocationCounter_Buffer = CBT_Buffer[1];
 	}
 }
 
@@ -628,8 +983,7 @@ void UGeoDelaunatorComponent::RefineBisectorPointers(int32 ParentPool, int32 Eve
 
 void UGeoDelaunatorComponent::RefineBisector(int32 PoolIndex, int32 RecursionDepth, int32 DepthCap, TArray<int32>& Busy, TArray<int32>& Done)
 {
-	// Algorithm 3. Split with the twin only when it points back at the same depth.
-	// A live twin that does not point back is not a border: splitting alone puts the midpoint on one triangle only.
+	// Algorithm 3. Pair-split when the twin points back at the same depth. Otherwise split this triangle.
 	if (RecursionDepth > 32 || !IsLiveBisector(PoolIndex) || Done.Contains(PoolIndex) || Busy.Contains(PoolIndex))
 	{
 		return;
@@ -666,11 +1020,6 @@ void UGeoDelaunatorComponent::RefineBisector(int32 PoolIndex, int32 RecursionDep
 		&& !Done.Contains(TwinIdx)
 		&& RootBisectors_Buffer[TwinIdx].Twin == PoolIndex
 		&& BisectorSplitDepth(RootBisectors_Buffer[TwinIdx].BisectorID) == MyDepth;
-	if (!bPair && IsLiveBisector(TwinIdx))
-	{
-		return;
-	}
-
 	SplitBisector(PoolIndex, bPair ? TwinIdx : INDEX_NONE);
 	if (!IsLiveBisector(PoolIndex) || BisectorSplitDepth(RootBisectors_Buffer[PoolIndex].BisectorID) == MyDepth)
 	{
@@ -1817,6 +2166,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	}
 
 	AllocationCounter_Buffer = NumRootBisectors;
+	LastClosestSite = INDEX_NONE;
 	
 	FPointer_CBT InvalidPointer;
 	InvalidPointer.IndexBuffer = INVALID_POINTER;

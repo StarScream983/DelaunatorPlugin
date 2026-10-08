@@ -529,13 +529,22 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0", UIMin = "0", ClampMax = "5", UIMax = "5"), Category = "GeoDelaunator|Pawn")
 	int32 NeighborRingDepth = 2;
 
+	// Max split count and number of distance bands inside the trigger.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1", UIMin = "1", ClampMax = "24", UIMax = "24"), Category = "GeoDelaunator|Pawn")
+	int32 SubdivDepth = 5;
+
+	// TriggerRadius = UnitVoronoiSubdivRadius * this. Split into SubdivDepth equal bands.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1.0", UIMin = "1.0"), Category = "GeoDelaunator|Pawn")
+	float SubdivTriggerMultiplier = 6.f;
+
 	int32 ClosestSite = INDEX_NONE;
+	int32 LastClosestSite = INDEX_NONE; // previous closest; merge it out when the pawn leaves
 
 	uint32 D{ 16 }; // CBT Depth
 	TArray<FHalfEdge_CBT> HalfEdge_Buffer;
 	TArray<FRootBisector_CBT> RootBisectors_Buffer;
 	TArray<int32> CBT_Buffer;
-	int32 AllocationCounter_Buffer = 0;
+	int32 AllocationCounter_Buffer = 0; // paper: live count = CBT[1] after occupy/free
 	TArray<FPointer_CBT> Pointer_Buffer;
 
 	TSharedPtr<FCBTResource_Interface> CBTResources;
@@ -550,11 +559,19 @@ protected:
 	void GenerateSplitCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth);
 	void ReserveSplitBlocks();
 	void FillSplitBlocks(int32 Begin, int32 EndHe);
+	void GenerateMergeCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth);
+	void FillMergeBlocks(int32 Begin, int32 EndHe);
+	void MergeSiteToDepth(int32 SiteIndex, int32 TargetDepth);
+	void MergeBisector(int32 PoolIndexJ, int32 RecursionDepth = 0);
 	void RefineBisector(int32 PoolIndex, int32 RecursionDepth, int32 DepthCap, TArray<int32>& Busy, TArray<int32>& Done);
 	void SplitBisector(int32 PoolIndexJ, int32 PoolIndexK);
 	void RefineBisectorPointers(int32 ParentPool, int32 EvenPool, int32 OddPool);
+	int32 OneToBitID(int32 Index) const; // Algorithm 7: i-th occupied pool slot
+	int32 ZeroToBitID(int32 Index) const; // Algorithm 8: i-th free pool slot
 	int32 AllocateBisectorSlot();
 	void OccupyCbtPoolSlot(int32 PoolIndex);
+	void FreeCbtPoolSlot(int32 PoolIndex);
+	void ReleaseBisectorSlot(int32 PoolIndex);
 	bool IsLiveBisector(int32 PoolIndex) const;
 	bool GetBisectorVertices(int32 PoolIndex, int32 RootHeID, FVector& OutV0, FVector& OutV1, FVector& OutV2) const;
 	void DrawBisectorDebug(int32 PoolIndex, int32 RootHeID, float GroundRadius);
