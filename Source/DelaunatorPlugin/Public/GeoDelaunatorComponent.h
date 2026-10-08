@@ -543,8 +543,14 @@ protected:
 	/** Game thread: `SyncPlanetColorDebugToRenderThread`; render thread: `GetPlanetColorDebugShaderValue_RenderThread`. */
 	TAtomic<uint32> PlanetColorDebugShaderValue;
 
-	// Sequential CPU split (paper §2 Algorithms 3–5). Pool index, not BisectorID.
-	void RefineBisector(int32 PoolIndex, int32 RecursionDepth = 0, int32 DepthCap = 5);
+	// Paper §3.3 update, run on the CPU from PawnTick. Pool index, not BisectorID.
+	int32 BisectorSplitDepth(uint64 BisectorID) const; // how many times has this triangle been split
+	int32 RootHalfEdgeFromBisectorID(uint64 BisectorID) const; // which original half-edge did this triangle come from
+	void ResetBisectorUpdateFields();
+	void GenerateSplitCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth);
+	void ReserveSplitBlocks();
+	void FillSplitBlocks(int32 Begin, int32 EndHe);
+	void RefineBisector(int32 PoolIndex, int32 RecursionDepth, int32 DepthCap, TArray<int32>& Busy, TArray<int32>& Done);
 	void SplitBisector(int32 PoolIndexJ, int32 PoolIndexK);
 	void RefineBisectorPointers(int32 ParentPool, int32 EvenPool, int32 OddPool);
 	int32 AllocateBisectorSlot();

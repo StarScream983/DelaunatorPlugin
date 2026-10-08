@@ -26,23 +26,3 @@ Copy this block when adding a new entry.
 ```
 
 ---
-
-## Open issues
-
-_(none recorded yet)_
-
----
-
-## Resolved issues
-
-_(none recorded yet)_
-
----
-
-## Known dead‑ends — DO NOT retry without new information
-
-Use this section for approaches that are tempting but have been verified to
-not work for this project. Each entry should explain **why** so a future chat
-can recognize when conditions have changed enough to revisit.
-
-_(none recorded yet)_
