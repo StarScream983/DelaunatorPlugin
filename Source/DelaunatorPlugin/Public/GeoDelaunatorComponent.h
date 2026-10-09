@@ -491,7 +491,7 @@ protected:
 
 	TArray<FVector2D> LonLat;
 	TArray<FVector> FibonacciPoints; // BUFFER FOR TRIANGLES VERTICES
-	float VoronoiSubdivRadiusMultiplier = 1.2f; // scales site chord into the yellow unit sphere
+	float VoronoiSubdivRadiusMultiplier = 1.1f; // scales site chord into the yellow unit sphere
 	TArray<double> VoronoiSubdivRadius; // farther voronoi corner for each site, serves as subdiv distance unit
 	TArray<uint32> VoronoiCellColors; // random colors for Voronoi cells, generated on CPU and sent to GPU for rendering
 	TArray<FVector3_HighLow> FibonacciPoints_HL; // HIGH-LOW BUFFER FOR GPU TRIANGLE VERTICES
@@ -537,8 +537,16 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1.0", UIMin = "1.0"), Category = "GeoDelaunator|Pawn")
 	float SubdivTriggerMultiplier = 6.f;
 
+	// Yellow, orange, blue, green, and red site spheres in PawnTick.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Pawn")
+	bool bShowSubdivSpheres = false;
+
 	int32 ClosestSite = INDEX_NONE;
 	int32 LastClosestSite = INDEX_NONE; // previous closest; merge it out when the pawn leaves
+	TArray<int32> TrackedSites; // ClosestSite plus its neighbor ring from the last tick
+	TArray<int32> DebugGreenSites; // joined the ring this entry; drawn green until the flash ends
+	TArray<int32> DebugRedSites; // left the ring this entry; drawn red until the flash ends
+	float DebugFlashUntil = 0.f;
 
 	uint32 D{ 16 }; // CBT Depth
 	TArray<FHalfEdge_CBT> HalfEdge_Buffer;
@@ -562,10 +570,13 @@ protected:
 	void GenerateMergeCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth);
 	void FillMergeBlocks(int32 Begin, int32 EndHe);
 	void MergeSiteToDepth(int32 SiteIndex, int32 TargetDepth);
+	void SplitSiteToDepth(int32 SiteIndex, int32 TargetDepth);
 	void MergeBisector(int32 PoolIndexJ, int32 RecursionDepth = 0);
 	void RefineBisector(int32 PoolIndex, int32 RecursionDepth, int32 DepthCap, TArray<int32>& Busy, TArray<int32>& Done);
 	void SplitBisector(int32 PoolIndexJ, int32 PoolIndexK);
+	void SplitBisectorFromSnapshot(int32 PoolIndexJ, int32 PoolIndexK, const TArray<int32>& SnapNext, const TArray<int32>& SnapPrev, TArray<uint8>& Written);
 	void RefineBisectorPointers(int32 ParentPool, int32 EvenPool, int32 OddPool);
+	void RefineBisectorPointersFromSnapshot(int32 ParentPool, int32 EvenPool, int32 OddPool, int32 SnapNext, int32 SnapPrev, const TArray<int32>& SnapNextArr, const TArray<int32>& SnapPrevArr, TArray<uint8>& Written);
 	int32 OneToBitID(int32 Index) const; // Algorithm 7: i-th occupied pool slot
 	int32 ZeroToBitID(int32 Index) const; // Algorithm 8: i-th free pool slot
 	int32 AllocateBisectorSlot();

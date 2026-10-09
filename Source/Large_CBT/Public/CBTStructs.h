@@ -8,6 +8,25 @@
  * 
  */
 // Constants so we don't sprinkle magic numbers
+
+// Pointer to an invalid neighbor or index
+#define INVALID_POINTER 2147483647
+
+// BisectorCommand (paper §3.3 GenerateCommands): one int, a bit code, reset to 0 = keep.
+// Not an enum of 7 states. Cull (backface / frustum / too small) is a *decision* that
+// leaves the command at 0; it is not stored in this field.
+// Bits 0–2: split, one bit per edge (compatibility chain which edge to bisect).
+// Bits 3–5: merge (triangle vs border/quad config + “smallest index” so only one bisector allocates).
+// If split and merge both set, ignore merge (paper ReserveBlocks).
+#define CBT_CMD_KEEP            0
+#define CBT_CMD_SPLIT_EDGE0     (1 << 0)
+#define CBT_CMD_SPLIT_EDGE1     (1 << 1)
+#define CBT_CMD_SPLIT_EDGE2     (1 << 2)
+#define CBT_CMD_SPLIT_ANY       (CBT_CMD_SPLIT_EDGE0 | CBT_CMD_SPLIT_EDGE1 | CBT_CMD_SPLIT_EDGE2)
+#define CBT_CMD_MERGE_QUAD      (1 << 3)
+#define CBT_CMD_MERGE_BORDER    (1 << 4)
+#define CBT_CMD_MERGE_MININDEX  (1 << 5)
+
 enum EHalfedgeField : uint32
 {
     HE_Twin = 0,
@@ -29,24 +48,6 @@ struct FHalfEdge_CBT
     int32 Edge;
     int32 Face;
 };
-
-// Pointer to an invalid neighbor or index
-#define INVALID_POINTER 2147483647
-
-// BisectorCommand (paper §3.3 GenerateCommands): one int, a bit code, reset to 0 = keep.
-// Not an enum of 7 states. Cull (backface / frustum / too small) is a *decision* that
-// leaves the command at 0; it is not stored in this field.
-// Bits 0–2: split, one bit per edge (compatibility chain which edge to bisect).
-// Bits 3–5: merge (triangle vs border/quad config + “smallest index” so only one bisector allocates).
-// If split and merge both set, ignore merge (paper ReserveBlocks).
-#define CBT_CMD_KEEP            0
-#define CBT_CMD_SPLIT_EDGE0     (1 << 0)
-#define CBT_CMD_SPLIT_EDGE1     (1 << 1)
-#define CBT_CMD_SPLIT_EDGE2     (1 << 2)
-#define CBT_CMD_SPLIT_ANY       (CBT_CMD_SPLIT_EDGE0 | CBT_CMD_SPLIT_EDGE1 | CBT_CMD_SPLIT_EDGE2)
-#define CBT_CMD_MERGE_QUAD      (1 << 3)
-#define CBT_CMD_MERGE_BORDER    (1 << 4)
-#define CBT_CMD_MERGE_MININDEX  (1 << 5)
 
 // Root Bisector Buffer
 struct FRootBisector_CBT

@@ -15,3 +15,6 @@
 Root index is `j = NumLeaves + h`, and `NumLeaves` is `1 << D` from the existing H calculation. Algorithm 2: split depth is `floor(log2 j) - D`, root half-edge is `(j >> depth) - NumLeaves`. `Child0`–`Child3` are not child pointers and not the root half-edge.
 
 Not yet: merge, Algorithm 8 free-slot reuse, pointer buffer, the repo's multi-edge compatibility chain in one update.
+
+i have thought about cpu-gpu synchronisation, let's do this thought experiment:
+on the GPU: we have 2 mirrored sets of CBT buffers
