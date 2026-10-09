@@ -289,23 +289,44 @@ void UGeoDelaunatorComponent::PawnTick()
 		return;
 	}
 
-	// Find the closest site to the pawn
+	// Full scan when ClosestSite is unset. Otherwise only ClosestSite and its neighbors.
 	float BestDot = -2.f;
 	int32 BestSite = INDEX_NONE;
-	for (int32 Site = 0; Site < FibonacciPoints.Num(); ++Site)
+	auto ConsiderSite = [&](int32 Site)
 	{
+		if (!FibonacciPoints.IsValidIndex(Site))
+		{
+			return;
+		}
 		const float Dot = FVector::DotProduct(PawnDir, FibonacciPoints[Site]);
 		if (Dot > BestDot)
 		{
 			BestDot = Dot;
 			BestSite = Site;
 		}
+	};
+	if (ClosestSite >= 0 && ClosestSite < N && FibonacciPoints.IsValidIndex(ClosestSite))
+	{
+		ConsiderSite(ClosestSite);
+		TArray<int32> NeighborSites;
+		CollectVoronoiNeighborRings(ClosestSite, NeighborRingDepth, NeighborSites);
+		for (const int32 NeighborSite : NeighborSites)
+		{
+			ConsiderSite(NeighborSite);
+		}
 	}
-	ClosestSite = BestSite;
-	if (ClosestSite == INDEX_NONE)
+	else
+	{
+		for (int32 Site = 0; Site < FibonacciPoints.Num(); ++Site)
+		{
+			ConsiderSite(Site);
+		}
+	}
+	if (BestSite == INDEX_NONE)
 	{
 		return;
 	}
+	ClosestSite = BestSite;
 
 	// Calculate the ground radius and site world position
 	// Same radial scale as collision / GeoVoronoiIndirectInstancingVertexFactory.ush
@@ -459,7 +480,8 @@ void UGeoDelaunatorComponent::PawnTick()
 			const float SiteElev = ElevationPerSite.IsValidIndex(Site) ? ElevationPerSite[Site] : 0.0f;
 			const float SiteGround = (float)PlanetRadius * (1.0f + SiteElev * ElevationScale);
 			const int32 PoolSize = RootBisectors_Buffer.Num();
-			for (int32 PoolIndex = 0; PoolIndex < PoolSize; ++PoolIndex)
+			if (Site == ClosestSite)
+			{for (int32 PoolIndex = 0; PoolIndex < PoolSize; ++PoolIndex)
 			{
 				if (!IsLiveBisector(PoolIndex))
 				{
@@ -471,7 +493,7 @@ void UGeoDelaunatorComponent::PawnTick()
 					continue;
 				}
 				DrawBisectorDebug(PoolIndex, RootHe, SiteGround);
-			}
+			}}
 		}
 		LastClosestSite = ClosestSite;
 		TrackedSites = MoveTemp(NewTracked);
@@ -1424,11 +1446,11 @@ void UGeoDelaunatorComponent::DrawBisectorDebug(int32 PoolIndex, int32 RootHeID,
 		return;
 	}
 	const FTransform& Xf = GetComponentTransform();
-	const float DebugRadius = GroundRadius + 3.f;
+	const float DebugRadius = GroundRadius + 0.f;
 	const FVector W0 = Xf.TransformPosition(V0 * DebugRadius);
 	const FVector W1 = Xf.TransformPosition(V1 * DebugRadius);
 	const FVector W2 = Xf.TransformPosition(V2 * DebugRadius);
-	const float DebugThickness = 5.f;
+	const float DebugThickness = 1000.f;
 	DrawDebugLine(World, W0, W1, FColor::Magenta, false, 0.15f, 0, DebugThickness);
 	DrawDebugLine(World, W1, W2, FColor::Magenta, false, 0.15f, 0, DebugThickness);
 	DrawDebugLine(World, W2, W0, FColor::Magenta, false, 0.15f, 0, DebugThickness);

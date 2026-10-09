@@ -56,6 +56,10 @@ AExplorer::AExplorer()
 void AExplorer::BeginPlay()
 {
 	Super::BeginPlay();
+
+	MovementComponent->MaxSpeed = FlightSpeed;
+	MovementComponent->Acceleration = FlightSpeed * 4.f;
+	MovementComponent->Deceleration = FlightSpeed * 4.f;
 	
 	//Add Input Mapping Context
 	if (Controller)
@@ -97,6 +101,7 @@ void AExplorer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AExplorer::Look);
 		EnhancedInputComponent->BindAction(RollAction, ETriggerEvent::Triggered, this, &AExplorer::Roll);
+		EnhancedInputComponent->BindAction(ChangeSpeedAction, ETriggerEvent::Triggered, this, &AExplorer::ChangeSpeed);
 	}
 	else
 	{
@@ -166,6 +171,24 @@ void AExplorer::Roll(const FInputActionValue& Value)
 	NewQuat.Normalize();
 
 	SetActorRotation(NewQuat);
+}
+
+void AExplorer::ChangeSpeed(const FInputActionValue& Value)
+{
+	const float WheelDirection = Value.Get<float>();
+	if (FMath::IsNearlyZero(WheelDirection))
+	{
+		return;
+	}
+
+	FlightSpeed = FMath::Clamp(
+		FlightSpeed * FMath::Pow(SpeedStepMultiplier, WheelDirection),
+		1.f,
+		100000000.f);
+
+	MovementComponent->MaxSpeed = FlightSpeed;
+	MovementComponent->Acceleration = FlightSpeed * 4.f;
+	MovementComponent->Deceleration = FlightSpeed * 4.f;
 }
 
 FVector AExplorer::GetPlanetOverlapLocation() const

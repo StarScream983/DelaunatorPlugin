@@ -20,6 +20,8 @@ class DELAUNATORPLUGIN_API AExplorer : public APawn, public IPawnInterface
 {
 	GENERATED_BODY()
 
+protected:
+
 	/** MappingContext */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputMappingContext* DefaultMappingContext;
@@ -36,6 +38,10 @@ class DELAUNATORPLUGIN_API AExplorer : public APawn, public IPawnInterface
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* RollAction;
 
+	/** Change Speed Input Action */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* ChangeSpeedAction;
+
 	UPROPERTY(Category = Explorer, VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCapsuleComponent> CapsuleComponent;
 
@@ -43,6 +49,12 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = Input, meta = (ClampMin = "0.0", UIMin = "0.0", ClampMax = "10.0", UIMax = "10.0"))
 	float Speed = 1.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input)
+	float FlightSpeed = 3000.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input)
+	float SpeedStepMultiplier = 2.f;
 
 public:	
 
@@ -67,6 +79,7 @@ protected:
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
 	void Roll(const FInputActionValue& Value);
+	void ChangeSpeed(const FInputActionValue& Value);
 
 public:	
 	// Called every frame

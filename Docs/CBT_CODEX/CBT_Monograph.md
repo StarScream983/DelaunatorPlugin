@@ -51,3 +51,20 @@ We further detail the purpose of each of these attributes in the following parag
 - `[2^D … 2^{D+1} − 1]` — bitfield, one bit per pool slot. `1` = occupied, `0` = free. Not split/merge (that is `BisectorCommand` / `j`).
 
 On a bit flip: set the leaf, then only the path to `CBT[1]`. Full reduce is init only.
+
+---
+
+No. The eight paper algorithms are only partly in the tick path.
+
+| Algorithm | What it does | In the tick |
+|---|---|---|
+| 1 | Root triangle corners from the half-edge | Yes, inside the debug draw |
+| 2 | Child corners from the low bits of `BisectorID` | Yes, same draw |
+| 3 | Refine the twin first, then split the pair | Written, not called. The tick splits this cell and the current twin only |
+| 4 | Merge a same-depth diamond or a border pair | Yes, as merge-by-heap-id. It frees the odd slot |
+| 5 | Point neighbors at the new children | Yes |
+| 6 | Point neighbors back at the parent | Yes, inside the merge |
+| 7 | i-th occupied slot | Written, never called |
+| 8 | i-th free slot | Yes, that is the allocator |
+
+Also missing for a GPU sync: the pointer buffer is allocated and filled with empty entries. Nothing writes Algorithm 7/8 results into it, and the repo's one-update double and triple splits are not in this path.
