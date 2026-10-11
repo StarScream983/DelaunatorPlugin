@@ -540,25 +540,34 @@ void UGeoDelaunatorComponent::ResetBisectorUpdateFields(int32 inSite)
 
 void UGeoDelaunatorComponent::CollectSiteRootBisectors(int32 BeginHe, int32 EndHe, TArray<int32>& OutSlots) const
 {
-	// Every live slot whose root half-edge is in this site. Next only keeps the latest odd.
+	// Roots are the contiguous range. Older odds are not on Next; they are listed per root half-edge.
 	OutSlots.Reset();
 	if (BeginHe > EndHe)
 	{
 		return;
 	}
-	const int32 PoolSize = RootBisectors_Buffer.Num();
-	for (int32 PoolIndex = 0; PoolIndex < PoolSize; ++PoolIndex)
+	for (int32 He = BeginHe; He <= EndHe; ++He)
 	{
-		if (!IsLiveBisector(PoolIndex))
+		if (IsLiveBisector(He) && RootHalfEdgeFromBisectorID(RootBisectors_Buffer[He].BisectorID) == He)
+		{
+			OutSlots.Add(He);
+		}
+		if (!OddsByRootHe.IsValidIndex(He))
 		{
 			continue;
 		}
-		const int32 RootHe = RootHalfEdgeFromBisectorID(RootBisectors_Buffer[PoolIndex].BisectorID);
-		if (RootHe < BeginHe || RootHe > EndHe)
+		for (const int32 PoolIndex : OddsByRootHe[He])
 		{
-			continue;
+			if (!IsLiveBisector(PoolIndex))
+			{
+				continue;
+			}
+			if (RootHalfEdgeFromBisectorID(RootBisectors_Buffer[PoolIndex].BisectorID) != He)
+			{
+				continue;
+			}
+			OutSlots.Add(PoolIndex);
 		}
-		OutSlots.Add(PoolIndex);
 	}
 }
 
@@ -990,11 +999,35 @@ void UGeoDelaunatorComponent::FreeCbtPoolSlot(int32 PoolIndex)
 	}
 }
 
+void UGeoDelaunatorComponent::RegisterOddSlot(int32 PoolIndex)
+{
+	if (!IsLiveBisector(PoolIndex))
+	{
+		return;
+	}
+	const int32 RootHe = RootHalfEdgeFromBisectorID(RootBisectors_Buffer[PoolIndex].BisectorID);
+	// The even child stays in the root slot and is already covered by the root range.
+	if (RootHe == PoolIndex || !OddsByRootHe.IsValidIndex(RootHe))
+	{
+		return;
+	}
+	TArray<int32>& Odds = OddsByRootHe[RootHe];
+	if (!Odds.Contains(PoolIndex))
+	{
+		Odds.Add(PoolIndex);
+	}
+}
+
 void UGeoDelaunatorComponent::ReleaseBisectorSlot(int32 PoolIndex)
 {
 	if (!RootBisectors_Buffer.IsValidIndex(PoolIndex) || RootBisectors_Buffer[PoolIndex].BisectorID == 0)
 	{
 		return;
+	}
+	const int32 RootHe = RootHalfEdgeFromBisectorID(RootBisectors_Buffer[PoolIndex].BisectorID);
+	if (OddsByRootHe.IsValidIndex(RootHe))
+	{
+		OddsByRootHe[RootHe].RemoveSingle(PoolIndex);
 	}
 	FRootBisector_CBT& Slot = RootBisectors_Buffer[PoolIndex];
 	Slot.BisectorID = 0;
@@ -1156,6 +1189,7 @@ void UGeoDelaunatorComponent::SplitBisectorFromSnapshot(
 	OddJBisector.Child2 = INVALID_POINTER;
 	OddJBisector.Child3 = INVALID_POINTER;
 	RootBisectors_Buffer[OddJ] = OddJBisector;
+	RegisterOddSlot(OddJ);
 	Written.Add(PoolIndexJ);
 	Written.Add(OddJ);
 
@@ -1182,6 +1216,7 @@ void UGeoDelaunatorComponent::SplitBisectorFromSnapshot(
 		OddKBisector.Child2 = INVALID_POINTER;
 		OddKBisector.Child3 = INVALID_POINTER;
 		RootBisectors_Buffer[OddK] = OddKBisector;
+		RegisterOddSlot(OddK);
 		Written.Add(PoolIndexK);
 		Written.Add(OddK);
 	}
@@ -1492,7 +1527,7 @@ void UGeoDelaunatorComponent::DrawBisectorDebug(int32 PoolIndex, int32 RootHeID,
 	const FVector W0 = Xf.TransformPosition(V0 * DebugRadius);
 	const FVector W1 = Xf.TransformPosition(V1 * DebugRadius);
 	const FVector W2 = Xf.TransformPosition(V2 * DebugRadius);
-	const float DebugThickness = 0.5f;
+	const float DebugThickness = FMath::Clamp(DebugBisectorThickness, 0.5f, 1000.f);
 	DrawDebugLine(World, W0, W1, FColor::Magenta, false, 0.15f, 0, DebugThickness);
 	DrawDebugLine(World, W1, W2, FColor::Magenta, false, 0.15f, 0, DebugThickness);
 	DrawDebugLine(World, W2, W0, FColor::Magenta, false, 0.15f, 0, DebugThickness);
@@ -1579,6 +1614,7 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		ImGui::Checkbox("Bisectors##Neighbors", &bDrawNeighborBisectors);
 		ImGui::SameLine();
 		ImGui::Checkbox("Unit Sphere##Neighbors", &bDrawNeighborSpheres);
+		ImGui::SliderFloat("Debug Bisector Thickness", &DebugBisectorThickness, 0.5f, 1000.f, "%.1f m");
 	}
 	ImGui::End();
 #pragma endregion PLANET_GENERAL_DATA_WINDOW
@@ -2446,10 +2482,13 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	}
 
 	AllocationCounter_Buffer = NumRootBisectors;
+	OddsByRootHe.Reset();
+	OddsByRootHe.SetNum(NumRootBisectors);
 	LastClosestSite = INDEX_NONE;
 	TrackedSites.Reset();
 	DiscoveredSites.Reset();
 	AbandonedSites.Reset();
+	DrawnBisectorsBySite.Reset();
 	DebugFlashUntil = 0.f;
 	
 	FPointer_CBT InvalidPointer;

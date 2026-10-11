@@ -549,6 +549,8 @@ protected:
 	bool bDrawClosestBisectors = false;
 	bool bDrawNeighborSpheres = false;
 	bool bDrawNeighborBisectors = false;
+	// Magenta bisector lines in PawnTick. Meters, matching DrawDebugLine thickness.
+	float DebugBisectorThickness = 0.5f;
 
 	int32 ClosestSite = INDEX_NONE;
 	int32 LastClosestSite = INDEX_NONE; // previous closest; merge it out when the pawn leaves
@@ -561,6 +563,8 @@ protected:
 	uint32 D{ 16 }; // CBT Depth
 	TArray<FHalfEdge_CBT> HalfEdge_Buffer;
 	TArray<FRootBisector_CBT> RootBisectors_Buffer;
+	// Odd pool slots keyed by root half-edge. The root slot keeps only the latest odd in Next.
+	TArray<TArray<int32>> OddsByRootHe;
 	TArray<int32> CBT_Buffer;
 	int32 AllocationCounter_Buffer = 0; // paper: live count = CBT[1] after occupy/free
 	TArray<FPointer_CBT> Pointer_Buffer;
@@ -576,7 +580,7 @@ protected:
 	int32 BisectorSplitDepth(uint64 BisectorID) const; // how many times has this triangle been split
 	int32 RootHalfEdgeFromBisectorID(uint64 BisectorID) const; // which original half-edge did this triangle come from
 	void ResetBisectorUpdateFields(int32 inSite);
-	// Live slots whose root half-edge is in [BeginHe, EndHe]. EndHe is inclusive.
+	// Root slots in [BeginHe, EndHe] plus the odds recorded for those half-edges. EndHe is inclusive.
 	void CollectSiteRootBisectors(int32 BeginHe, int32 EndHe, TArray<int32>& OutSlots) const;
 	void GenerateSplitCommands(int32 BeginHe, int32 EndHe, int32 TargetSubdivDepth);
 	void ReserveSplitBlocks(int32 BeginHe, int32 EndHe);
@@ -592,6 +596,8 @@ protected:
 	int32 AllocateBisectorSlot();
 	void OccupyCbtPoolSlot(int32 PoolIndex);
 	void FreeCbtPoolSlot(int32 PoolIndex);
+	// Record an odd slot under the root half-edge stored in its BisectorID.
+	void RegisterOddSlot(int32 PoolIndex);
 	void ReleaseBisectorSlot(int32 PoolIndex);
 	bool IsLiveBisector(int32 PoolIndex) const;
 	bool GetBisectorVertices(int32 PoolIndex, int32 RootHeID, FVector& OutV0, FVector& OutV1, FVector& OutV2) const;
