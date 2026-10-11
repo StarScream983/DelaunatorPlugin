@@ -543,11 +543,19 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "GeoDelaunator|Pawn")
 	bool bShowSubdivSpheres = false;
 
+	// ImGui toggles in the Delaunay General Data window.
+	bool bDrawClosestUnitSphere = false;
+	bool bDrawClosestTriggerSphere = false;
+	bool bDrawClosestBisectors = false;
+	bool bDrawNeighborSpheres = false;
+	bool bDrawNeighborBisectors = false;
+
 	int32 ClosestSite = INDEX_NONE;
 	int32 LastClosestSite = INDEX_NONE; // previous closest; merge it out when the pawn leaves
 	TArray<int32> TrackedSites; // ClosestSite plus its neighbor ring from the last tick
 	TArray<int32> DiscoveredSites; // joined the ring this entry; drawn green until the flash ends
 	TArray<int32> AbandonedSites; // left the ring this entry; drawn red until the flash ends
+	TMap<int32, TArray<int32>> DrawnBisectorsBySite; // site -> live bisectors, refreshed when that site is split
 	float DebugFlashUntil = 0.f;
 
 	uint32 D{ 16 }; // CBT Depth
@@ -568,16 +576,18 @@ protected:
 	int32 BisectorSplitDepth(uint64 BisectorID) const; // how many times has this triangle been split
 	int32 RootHalfEdgeFromBisectorID(uint64 BisectorID) const; // which original half-edge did this triangle come from
 	void ResetBisectorUpdateFields(int32 inSite);
-	void GenerateSplitCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth);
-	void ReserveSplitBlocks();
-	void FillSplitBlocks(int32 Begin, int32 EndHe);
-	void GenerateMergeCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth);
-	void FillMergeBlocks(int32 Begin, int32 EndHe);
+	// Live slots whose root half-edge is in [BeginHe, EndHe]. EndHe is inclusive.
+	void CollectSiteRootBisectors(int32 BeginHe, int32 EndHe, TArray<int32>& OutSlots) const;
+	void GenerateSplitCommands(int32 BeginHe, int32 EndHe, int32 TargetSubdivDepth);
+	void ReserveSplitBlocks(int32 BeginHe, int32 EndHe);
+	void FillSplitBlocks(int32 BeginHe, int32 EndHe);
+	void GenerateMergeCommands(int32 BeginHe, int32 EndHe, int32 TargetSubdivDepth);
+	void FillMergeBlocks(int32 BeginHe, int32 EndHe);
 	void MergeSiteToDepth(int32 SiteIndex, int32 TargetDepth);
 	void SplitSiteToDepth(int32 SiteIndex, int32 TargetDepth);
-	void MergeBisector(int32 PoolIndexJ, int32 RecursionDepth = 0);
-	void SplitBisectorFromSnapshot(int32 PoolIndexJ, int32 PoolIndexK, const TArray<int32>& SnapNext, const TArray<int32>& SnapPrev, TArray<uint8>& Written);
-	void RefineBisectorPointersFromSnapshot(int32 ParentPool, int32 EvenPool, int32 OddPool, int32 SnapNext, int32 SnapPrev, const TArray<int32>& SnapNextArr, const TArray<int32>& SnapPrevArr, TArray<uint8>& Written);
+	void MergeBisector(int32 PoolIndexJ, const TArray<int32>& SiteSlots, int32 RecursionDepth = 0);
+	void SplitBisectorFromSnapshot(int32 PoolIndexJ, int32 PoolIndexK, const TMap<int32, int32>& SnapNext, const TMap<int32, int32>& SnapPrev, TSet<int32>& Written);
+	void RefineBisectorPointersFromSnapshot(int32 ParentPool, int32 EvenPool, int32 OddPool, int32 SnapNext, int32 SnapPrev, const TMap<int32, int32>& SnapNextArr, const TMap<int32, int32>& SnapPrevArr, TSet<int32>& Written);
 	int32 ZeroToBitID(int32 Index) const; // Algorithm 8: i-th free pool slot
 	int32 AllocateBisectorSlot();
 	void OccupyCbtPoolSlot(int32 PoolIndex);

@@ -361,9 +361,12 @@ void UGeoDelaunatorComponent::PawnTick()
 		: 40.f;
 	const float UnitVoronoiSubdivRadius = SubdivRadius * VoronoiSubdivRadiusMultiplier;
 	const float TriggerRadius = UnitVoronoiSubdivRadius * SubdivTriggerMultiplier;
-	if (bShowSubdivSpheres)
+	if (bDrawClosestUnitSphere)
 	{
 		DrawDebugSphere(GetWorld(), SiteWorldPos, UnitVoronoiSubdivRadius, 12, FColor::Yellow, false, 0.15f);
+	}
+	if (bDrawClosestTriggerSphere)
+	{
 		DrawDebugSphere(GetWorld(), SiteWorldPos, TriggerRadius, 16, FColor::Orange, false, 0.15f);
 	}
 
@@ -403,7 +406,7 @@ void UGeoDelaunatorComponent::PawnTick()
 
 	auto DrawSiteSphere = [&](int32 Site, const FColor& Color)
 	{
-		if (!bShowSubdivSpheres || !FibonacciPoints.IsValidIndex(Site))
+		if (!bDrawNeighborSpheres || !FibonacciPoints.IsValidIndex(Site))
 		{
 			return;
 		}
@@ -456,26 +459,23 @@ void UGeoDelaunatorComponent::PawnTick()
 			{
 				continue;
 			}
-			const int32 SiteBegin = SitePrefixSums[Site];
-			const int32 SiteEnd = SiteBegin + VoronoiHalfEdges_Map[Site].Num();
-			// Root half-edge range of the closest site. Paper Algorithm 2 recovers this from BisectorID.
 			const float SiteElev = ElevationPerSite.IsValidIndex(Site) ? ElevationPerSite[Site] : 0.0f;
 			const float SiteGround = (float)PlanetRadius * (1.0f + SiteElev * ElevationScale);
-			const int32 PoolSize = RootBisectors_Buffer.Num();
-			if (1) //(Site == ClosestSite)
-			{for (int32 PoolIndex = 0; PoolIndex < PoolSize; ++PoolIndex)
+			const bool bDrawThisSite = (Site == ClosestSite) ? bDrawClosestBisectors : bDrawNeighborBisectors;
+			if (!bDrawThisSite)
 			{
-				if (!IsLiveBisector(PoolIndex))
-				{
-					continue;
-				}
+				continue;
+			}
+			const TArray<int32>* Slots = DrawnBisectorsBySite.Find(Site);
+			if (!Slots)
+			{
+				continue;
+			}
+			for (const int32 PoolIndex : *Slots)
+			{
 				const int32 RootHe = RootHalfEdgeFromBisectorID(RootBisectors_Buffer[PoolIndex].BisectorID);
-				if (RootHe < SiteBegin || RootHe >= SiteEnd)
-				{
-					continue;
-				}
 				DrawBisectorDebug(PoolIndex, RootHe, SiteGround);
-			}}
+			}
 		}
 		LastClosestSite = ClosestSite;
 		TrackedSites = MoveTemp(NewTracked);
@@ -521,11 +521,13 @@ void UGeoDelaunatorComponent::ResetBisectorUpdateFields(int32 inSite)
 	const int32 Begin_HE = SitePrefixSums[inSite];
 	const int32 HE_Count = VoronoiHalfEdges_Map[inSite].Num();
 	const int32 End_HE = Begin_HE + HE_Count - 1;
-	for (int32 He = Begin_HE; He <= End_HE; ++He)
+	TArray<int32> Slots;
+	CollectSiteRootBisectors(Begin_HE, End_HE, Slots);
+	for (const int32 He : Slots)
 	{
 		if (!RootBisectors_Buffer.IsValidIndex(He))
 		{
-			break;
+			continue;
 		}
 		FRootBisector_CBT& Bisector = RootBisectors_Buffer[He];
 		Bisector.BisectorCommand = CBT_CMD_KEEP;
@@ -536,21 +538,41 @@ void UGeoDelaunatorComponent::ResetBisectorUpdateFields(int32 inSite)
 	}
 }
 
-void UGeoDelaunatorComponent::GenerateSplitCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth)
+void UGeoDelaunatorComponent::CollectSiteRootBisectors(int32 BeginHe, int32 EndHe, TArray<int32>& OutSlots) const
 {
-	const int32 LiveCount = RootBisectors_Buffer.Num();
-	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+	// Every live slot whose root half-edge is in this site. Next only keeps the latest odd.
+	OutSlots.Reset();
+	if (BeginHe > EndHe)
+	{
+		return;
+	}
+	const int32 PoolSize = RootBisectors_Buffer.Num();
+	for (int32 PoolIndex = 0; PoolIndex < PoolSize; ++PoolIndex)
+	{
+		if (!IsLiveBisector(PoolIndex))
+		{
+			continue;
+		}
+		const int32 RootHe = RootHalfEdgeFromBisectorID(RootBisectors_Buffer[PoolIndex].BisectorID);
+		if (RootHe < BeginHe || RootHe > EndHe)
+		{
+			continue;
+		}
+		OutSlots.Add(PoolIndex);
+	}
+}
+
+void UGeoDelaunatorComponent::GenerateSplitCommands(int32 BeginHe, int32 EndHe, int32 TargetSubdivDepth)
+{
+	TArray<int32> Slots;
+	CollectSiteRootBisectors(BeginHe, EndHe, Slots);
+	for (const int32 PoolIndex : Slots)
 	{
 		if (!IsLiveBisector(PoolIndex))
 		{
 			continue;
 		}
 		FRootBisector_CBT& Bisector = RootBisectors_Buffer[PoolIndex];
-		const int32 RootHe = RootHalfEdgeFromBisectorID(Bisector.BisectorID); // which original half-edge did this triangle come from
-		if (RootHe < Begin || RootHe >= EndHe)
-		{
-			continue;
-		}
 		const int32 MySubdivDepth = BisectorSplitDepth(Bisector.BisectorID); // how many times has this triangle been split
 		if (MySubdivDepth >= TargetSubdivDepth)
 		{
@@ -562,11 +584,12 @@ void UGeoDelaunatorComponent::GenerateSplitCommands(int32 Begin, int32 EndHe, in
 	}
 }
 
-void UGeoDelaunatorComponent::ReserveSplitBlocks()
+void UGeoDelaunatorComponent::ReserveSplitBlocks(int32 BeginHe, int32 EndHe)
 {
 	// Snapshot: AllocateBisectorSlot advances AllocationCounter. New slots are not commanded.
-	const int32 LiveCount = RootBisectors_Buffer.Num();
-	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+	TArray<int32> Slots;
+	CollectSiteRootBisectors(BeginHe, EndHe, Slots);
+	for (const int32 PoolIndex : Slots)
 	{
 		if (!IsLiveBisector(PoolIndex))
 		{
@@ -590,42 +613,45 @@ void UGeoDelaunatorComponent::ReserveSplitBlocks()
 	}
 }
 
-void UGeoDelaunatorComponent::FillSplitBlocks(int32 Begin, int32 EndHe)
+void UGeoDelaunatorComponent::FillSplitBlocks(int32 BeginHe, int32 EndHe)
 {
 	// Repo BisectElement: read neighbors from a snapshot, write only this bisector's children.
 	// Sequential live Alg 5 on the ring lets the first sectors steal the later ones' twins.
-	const int32 LiveCount = RootBisectors_Buffer.Num();
-	TArray<int32> SnapNext;
-	TArray<int32> SnapPrev;
-	SnapNext.SetNum(LiveCount);
-	SnapPrev.SetNum(LiveCount);
-	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+	TArray<int32> Slots;
+	CollectSiteRootBisectors(BeginHe, EndHe, Slots);
+
+	TMap<int32, int32> SnapNext;
+	TMap<int32, int32> SnapPrev;
+	auto SnapSlot = [this, &SnapNext, &SnapPrev](int32 PoolIndex)
 	{
 		if (!IsLiveBisector(PoolIndex))
 		{
-			SnapNext[PoolIndex] = INVALID_POINTER;
-			SnapPrev[PoolIndex] = INVALID_POINTER;
+			return;
+		}
+		SnapNext.Add(PoolIndex, RootBisectors_Buffer[PoolIndex].Next);
+		SnapPrev.Add(PoolIndex, RootBisectors_Buffer[PoolIndex].Prev);
+	};
+	for (const int32 PoolIndex : Slots)
+	{
+		SnapSlot(PoolIndex);
+		if (!IsLiveBisector(PoolIndex))
+		{
 			continue;
 		}
-		SnapNext[PoolIndex] = RootBisectors_Buffer[PoolIndex].Next;
-		SnapPrev[PoolIndex] = RootBisectors_Buffer[PoolIndex].Prev;
+		// The split reads this bisector and the neighbor its Next/Prev pointed at.
+		SnapSlot(RootBisectors_Buffer[PoolIndex].Next);
+		SnapSlot(RootBisectors_Buffer[PoolIndex].Prev);
 	}
 
 	TArray<int32> Order;
-	TArray<uint8> Written;
-	Written.Init(0, LiveCount);
-	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+	TSet<int32> Written;
+	for (const int32 PoolIndex : Slots)
 	{
 		if (!IsLiveBisector(PoolIndex))
 		{
 			continue;
 		}
 		if ((RootBisectors_Buffer[PoolIndex].BisectorCommand & CBT_CMD_SPLIT_ANY) == 0)
-		{
-			continue;
-		}
-		const int32 RootHe = RootHalfEdgeFromBisectorID(RootBisectors_Buffer[PoolIndex].BisectorID);
-		if (RootHe < Begin || RootHe >= EndHe)
 		{
 			continue;
 		}
@@ -639,7 +665,7 @@ void UGeoDelaunatorComponent::FillSplitBlocks(int32 Begin, int32 EndHe)
 
 	for (const int32 PoolIndex : Order)
 	{
-		if (Written.IsValidIndex(PoolIndex) && Written[PoolIndex])
+		if (Written.Contains(PoolIndex))
 		{
 			continue;
 		}
@@ -647,21 +673,17 @@ void UGeoDelaunatorComponent::FillSplitBlocks(int32 Begin, int32 EndHe)
 	}
 }
 
-void UGeoDelaunatorComponent::GenerateMergeCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth)
+void UGeoDelaunatorComponent::GenerateMergeCommands(int32 BeginHe, int32 EndHe, int32 TargetSubdivDepth)
 {
-	const int32 LiveCount = RootBisectors_Buffer.Num();
-	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+	TArray<int32> Slots;
+	CollectSiteRootBisectors(BeginHe, EndHe, Slots);
+	for (const int32 PoolIndex : Slots)
 	{
 		if (!IsLiveBisector(PoolIndex))
 		{
 			continue;
 		}
 		FRootBisector_CBT& Bisector = RootBisectors_Buffer[PoolIndex];
-		const int32 RootHe = RootHalfEdgeFromBisectorID(Bisector.BisectorID);
-		if (RootHe < Begin || RootHe >= EndHe)
-		{
-			continue;
-		}
 		const int32 MySubdivDepth = BisectorSplitDepth(Bisector.BisectorID);
 		if (MySubdivDepth <= TargetSubdivDepth)
 		{
@@ -672,11 +694,12 @@ void UGeoDelaunatorComponent::GenerateMergeCommands(int32 Begin, int32 EndHe, in
 	}
 }
 
-void UGeoDelaunatorComponent::FillMergeBlocks(int32 Begin, int32 EndHe)
+void UGeoDelaunatorComponent::FillMergeBlocks(int32 BeginHe, int32 EndHe)
 {
+	TArray<int32> Slots;
+	CollectSiteRootBisectors(BeginHe, EndHe, Slots);
 	TArray<int32> Order;
-	const int32 LiveCount = RootBisectors_Buffer.Num();
-	for (int32 PoolIndex = 0; PoolIndex < LiveCount; ++PoolIndex)
+	for (const int32 PoolIndex : Slots)
 	{
 		if (!IsLiveBisector(PoolIndex))
 		{
@@ -716,7 +739,7 @@ void UGeoDelaunatorComponent::FillMergeBlocks(int32 Begin, int32 EndHe)
 			continue;
 		}
 		const int32 OddJ = RootBisectors_Buffer[PoolIndex].Next;
-		MergeBisector(PoolIndex);
+		MergeBisector(PoolIndex, Slots);
 		Done.Add(PoolIndex);
 		if (IsLiveBisector(OddJ))
 		{
@@ -731,13 +754,15 @@ void UGeoDelaunatorComponent::MergeSiteToDepth(int32 SiteIndex, int32 TargetDept
 	{
 		return;
 	}
-	const int32 BeginHe = SitePrefixSums[SiteIndex];
-	const int32 EndHe = BeginHe + VoronoiHalfEdges_Map[SiteIndex].Num();
+	const int32 Begin_HE = SitePrefixSums[SiteIndex];
+	const int32 HE_Count = VoronoiHalfEdges_Map[SiteIndex].Num();
+	const int32 End_HE = Begin_HE + HE_Count - 1;
+	DrawnBisectorsBySite.Remove(SiteIndex);
 	for (int32 Generation = 0; Generation < SubdivDepth; ++Generation)
 	{
 		ResetBisectorUpdateFields(SiteIndex);
-		GenerateMergeCommands(BeginHe, EndHe, TargetDepth);
-		FillMergeBlocks(BeginHe, EndHe);
+		GenerateMergeCommands(Begin_HE, End_HE, TargetDepth);
+		FillMergeBlocks(Begin_HE, End_HE);
 	}
 }
 
@@ -747,18 +772,40 @@ void UGeoDelaunatorComponent::SplitSiteToDepth(int32 SiteIndex, int32 TargetDept
 	{
 		return;
 	}
-	const int32 BeginHe = SitePrefixSums[SiteIndex];
-	const int32 EndHe = BeginHe + VoronoiHalfEdges_Map[SiteIndex].Num();
+	const int32 Begin_HE = SitePrefixSums[SiteIndex];
+	const int32 HE_Count = VoronoiHalfEdges_Map[SiteIndex].Num();
+	const int32 End_HE = Begin_HE + HE_Count - 1;
+	// The even child stays in the root slot, so its depth is the depth of that triangle.
+	bool bAtDepth = true;
+	for (int32 He = Begin_HE; He <= End_HE; ++He)
+	{
+		if (!IsLiveBisector(He))
+		{
+			continue;
+		}
+		if (BisectorSplitDepth(RootBisectors_Buffer[He].BisectorID) < TargetDepth)
+		{
+			bAtDepth = false;
+			break;
+		}
+	}
+	if (bAtDepth)
+	{
+		return;
+	}
 	for (int32 Generation = 0; Generation < TargetDepth; ++Generation)
 	{
 		ResetBisectorUpdateFields(SiteIndex);
-		GenerateSplitCommands(BeginHe, EndHe, TargetDepth);
-		ReserveSplitBlocks();
-		FillSplitBlocks(BeginHe, EndHe);
+		GenerateSplitCommands(Begin_HE, End_HE, TargetDepth);
+		ReserveSplitBlocks(Begin_HE, End_HE);
+		FillSplitBlocks(Begin_HE, End_HE);
 	}
+	TArray<int32> Slots;
+	CollectSiteRootBisectors(Begin_HE, End_HE, Slots);
+	DrawnBisectorsBySite.Add(SiteIndex, MoveTemp(Slots));
 }
 
-void UGeoDelaunatorComponent::MergeBisector(int32 PoolIndexJ, int32 RecursionDepth)
+void UGeoDelaunatorComponent::MergeBisector(int32 PoolIndexJ, const TArray<int32>& SiteSlots, int32 RecursionDepth)
 {
 	// Inverse of Table 1. Even child occupies the parent slot; odd sibling is Next.
 	if (RecursionDepth > 32 || !IsLiveBisector(PoolIndexJ))
@@ -771,15 +818,18 @@ void UGeoDelaunatorComponent::MergeBisector(int32 PoolIndexJ, int32 RecursionDep
 	{
 		return;
 	}
-	// Repo SimplifyElement: pair is the odd heap id (even+1). Free that slot. Next/Prev do not gate the free.
+	// Repo SimplifyElement: pair is the odd heap id (even+1). Next is only the latest one.
+	auto IsOddSibling = [this, EvenID](int32 Slot) -> bool
+	{
+		return IsLiveBisector(Slot) && RootBisectors_Buffer[Slot].BisectorID == EvenID + 1;
+	};
 	int32 OddJ = EvenJ.Next;
-	if (!IsLiveBisector(OddJ) || RootBisectors_Buffer[OddJ].BisectorID != EvenID + 1)
+	if (!IsOddSibling(OddJ))
 	{
 		OddJ = INVALID_POINTER;
-		const int32 PoolSize = RootBisectors_Buffer.Num();
-		for (int32 Slot = 0; Slot < PoolSize; ++Slot)
+		for (const int32 Slot : SiteSlots)
 		{
-			if (IsLiveBisector(Slot) && RootBisectors_Buffer[Slot].BisectorID == EvenID + 1)
+			if (IsOddSibling(Slot))
 			{
 				OddJ = Slot;
 				break;
@@ -799,7 +849,7 @@ void UGeoDelaunatorComponent::MergeBisector(int32 PoolIndexJ, int32 RecursionDep
 		const int32 TwinDepth = BisectorSplitDepth(RootBisectors_Buffer[PoolIndexK].BisectorID);
 		if (TwinDepth > MyDepth)
 		{
-			MergeBisector(PoolIndexK, RecursionDepth + 1);
+			MergeBisector(PoolIndexK, SiteSlots, RecursionDepth + 1);
 		}
 	}
 	if (!IsLiveBisector(PoolIndexJ) || RootBisectors_Buffer[PoolIndexJ].BisectorID != EvenID
@@ -966,8 +1016,8 @@ void UGeoDelaunatorComponent::ReleaseBisectorSlot(int32 PoolIndex)
 void UGeoDelaunatorComponent::RefineBisectorPointersFromSnapshot(
 	int32 ParentPool, int32 EvenPool, int32 OddPool,
 	int32 SnapNext, int32 SnapPrev,
-	const TArray<int32>& SnapNextArr, const TArray<int32>& SnapPrevArr,
-	TArray<uint8>& Written)
+	const TMap<int32, int32>& SnapNextArr, const TMap<int32, int32>& SnapPrevArr,
+	TSet<int32>& Written)
 {
 	// Algorithm 5, using the generation snapshot so later ring entries still see the original Next/Prev.
 	auto Patch = [this, ParentPool, &SnapNextArr, &SnapPrevArr, &Written](int32 Neighbor, int32 NewPtr, bool bNeighborIsNext)
@@ -976,7 +1026,7 @@ void UGeoDelaunatorComponent::RefineBisectorPointersFromSnapshot(
 		{
 			return;
 		}
-		if (Written.IsValidIndex(Neighbor) && Written[Neighbor])
+		if (Written.Contains(Neighbor))
 		{
 			if (RootBisectors_Buffer[Neighbor].Twin == ParentPool)
 			{
@@ -984,9 +1034,11 @@ void UGeoDelaunatorComponent::RefineBisectorPointersFromSnapshot(
 			}
 			return;
 		}
+		const int32* SnapPrev = SnapPrevArr.Find(Neighbor);
+		const int32* SnapNextPtr = SnapNextArr.Find(Neighbor);
 		if (bNeighborIsNext)
 		{
-			if (SnapPrevArr.IsValidIndex(Neighbor) && SnapPrevArr[Neighbor] == ParentPool)
+			if (SnapPrev && *SnapPrev == ParentPool)
 			{
 				RootBisectors_Buffer[Neighbor].Prev = NewPtr;
 			}
@@ -997,7 +1049,7 @@ void UGeoDelaunatorComponent::RefineBisectorPointersFromSnapshot(
 		}
 		else
 		{
-			if (SnapNextArr.IsValidIndex(Neighbor) && SnapNextArr[Neighbor] == ParentPool)
+			if (SnapNextPtr && *SnapNextPtr == ParentPool)
 			{
 				RootBisectors_Buffer[Neighbor].Next = NewPtr;
 			}
@@ -1013,10 +1065,10 @@ void UGeoDelaunatorComponent::RefineBisectorPointersFromSnapshot(
 
 void UGeoDelaunatorComponent::SplitBisectorFromSnapshot(
 	int32 PoolIndexJ, int32 PoolIndexK,
-	const TArray<int32>& SnapNext, const TArray<int32>& SnapPrev,
-	TArray<uint8>& Written)
+	const TMap<int32, int32>& SnapNext, const TMap<int32, int32>& SnapPrev,
+	TSet<int32>& Written)
 {
-	if (!IsLiveBisector(PoolIndexJ) || (Written.IsValidIndex(PoolIndexJ) && Written[PoolIndexJ]))
+	if (!IsLiveBisector(PoolIndexJ) || Written.Contains(PoolIndexJ))
 	{
 		return;
 	}
@@ -1048,7 +1100,7 @@ void UGeoDelaunatorComponent::SplitBisectorFromSnapshot(
 	}
 
 	const bool bHasTwin = IsLiveBisector(PoolIndexK) && PoolIndexK != PoolIndexJ
-		&& !(Written.IsValidIndex(PoolIndexK) && Written[PoolIndexK]);
+		&& !Written.Contains(PoolIndexK);
 	if (bHasTwin && RootBisectors_Buffer[PoolIndexK].BisectorID > (MAX_uint64 >> 1))
 	{
 		return;
@@ -1060,8 +1112,10 @@ void UGeoDelaunatorComponent::SplitBisectorFromSnapshot(
 	}
 
 	const uint64 OldJ = RootBisectors_Buffer[PoolIndexJ].BisectorID;
-	const int32 OldNextJ = SnapNext.IsValidIndex(PoolIndexJ) ? SnapNext[PoolIndexJ] : RootBisectors_Buffer[PoolIndexJ].Next;
-	const int32 OldPrevJ = SnapPrev.IsValidIndex(PoolIndexJ) ? SnapPrev[PoolIndexJ] : RootBisectors_Buffer[PoolIndexJ].Prev;
+	const int32* SnapNextJ = SnapNext.Find(PoolIndexJ);
+	const int32* SnapPrevJ = SnapPrev.Find(PoolIndexJ);
+	const int32 OldNextJ = SnapNextJ ? *SnapNextJ : RootBisectors_Buffer[PoolIndexJ].Next;
+	const int32 OldPrevJ = SnapPrevJ ? *SnapPrevJ : RootBisectors_Buffer[PoolIndexJ].Prev;
 
 	uint64 OldK = 0;
 	int32 OldNextK = INVALID_POINTER;
@@ -1069,8 +1123,10 @@ void UGeoDelaunatorComponent::SplitBisectorFromSnapshot(
 	if (bHasTwin)
 	{
 		OldK = RootBisectors_Buffer[PoolIndexK].BisectorID;
-		OldNextK = SnapNext.IsValidIndex(PoolIndexK) ? SnapNext[PoolIndexK] : RootBisectors_Buffer[PoolIndexK].Next;
-		OldPrevK = SnapPrev.IsValidIndex(PoolIndexK) ? SnapPrev[PoolIndexK] : RootBisectors_Buffer[PoolIndexK].Prev;
+		const int32* SnapNextK = SnapNext.Find(PoolIndexK);
+		const int32* SnapPrevK = SnapPrev.Find(PoolIndexK);
+		OldNextK = SnapNextK ? *SnapNextK : RootBisectors_Buffer[PoolIndexK].Next;
+		OldPrevK = SnapPrevK ? *SnapPrevK : RootBisectors_Buffer[PoolIndexK].Prev;
 	}
 
 	RefineBisectorPointersFromSnapshot(PoolIndexJ, PoolIndexJ, OddJ, OldNextJ, OldPrevJ, SnapNext, SnapPrev, Written);
@@ -1100,8 +1156,8 @@ void UGeoDelaunatorComponent::SplitBisectorFromSnapshot(
 	OddJBisector.Child2 = INVALID_POINTER;
 	OddJBisector.Child3 = INVALID_POINTER;
 	RootBisectors_Buffer[OddJ] = OddJBisector;
-	if (Written.IsValidIndex(PoolIndexJ)) Written[PoolIndexJ] = 1;
-	if (Written.IsValidIndex(OddJ)) Written[OddJ] = 1;
+	Written.Add(PoolIndexJ);
+	Written.Add(OddJ);
 
 	if (bHasTwin)
 	{
@@ -1126,8 +1182,8 @@ void UGeoDelaunatorComponent::SplitBisectorFromSnapshot(
 		OddKBisector.Child2 = INVALID_POINTER;
 		OddKBisector.Child3 = INVALID_POINTER;
 		RootBisectors_Buffer[OddK] = OddKBisector;
-		if (Written.IsValidIndex(PoolIndexK)) Written[PoolIndexK] = 1;
-		if (Written.IsValidIndex(OddK)) Written[OddK] = 1;
+		Written.Add(PoolIndexK);
+		Written.Add(OddK);
 	}
 }
 
@@ -1436,7 +1492,7 @@ void UGeoDelaunatorComponent::DrawBisectorDebug(int32 PoolIndex, int32 RootHeID,
 	const FVector W0 = Xf.TransformPosition(V0 * DebugRadius);
 	const FVector W1 = Xf.TransformPosition(V1 * DebugRadius);
 	const FVector W2 = Xf.TransformPosition(V2 * DebugRadius);
-	const float DebugThickness = 1000.f;
+	const float DebugThickness = 0.5f;
 	DrawDebugLine(World, W0, W1, FColor::Magenta, false, 0.15f, 0, DebugThickness);
 	DrawDebugLine(World, W1, W2, FColor::Magenta, false, 0.15f, 0, DebugThickness);
 	DrawDebugLine(World, W2, W0, FColor::Magenta, false, 0.15f, 0, DebugThickness);
@@ -1476,7 +1532,6 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	// ...
-	FVector Location = GetOwner()->GetActorLocation();
 	UWorld* WorldActual = GetWorld();
 	if (!WorldActual) return;
 
@@ -1512,74 +1567,25 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 			PlanetColorDebug = static_cast<EGeoVoronoiPlanetColorDebug>(FMath::Clamp(ColorDbgIdx, 0, 6));
 		}
 		ImGui::Checkbox("Mesh Weaver unlit (flat site colors)", &bMeshWeaverUnlit);
+
+		ImGui::Separator();
+		ImGui::Text("Closest Site");
+		ImGui::Checkbox("Bisectors##Closest", &bDrawClosestBisectors);
+		ImGui::SameLine();
+		ImGui::Checkbox("Unit Sphere##Closest", &bDrawClosestUnitSphere);
+		ImGui::SameLine();
+		ImGui::Checkbox("Trigger Sphere##Closest", &bDrawClosestTriggerSphere);
+		ImGui::Text("Neighbors");
+		ImGui::Checkbox("Bisectors##Neighbors", &bDrawNeighborBisectors);
+		ImGui::SameLine();
+		ImGui::Checkbox("Unit Sphere##Neighbors", &bDrawNeighborSpheres);
 	}
 	ImGui::End();
 #pragma endregion PLANET_GENERAL_DATA_WINDOW
 
-#pragma region DRAW_VORONOI_DEBUG_WINDOW
-	static bool bDebugVHEs = false;
-	static int32 SiteID{ 0 };
-	static int32 PolyID{ 0 };
-	if (ImGui::Begin("VHE Debug")) {
-		ImGui::Checkbox("DEBUG VHEs", &bDebugVHEs);
-		if (ImGui::Button("PREV SITE"))
-		{
-			SiteID = FMath::Clamp(SiteID - 1, 0, N - 1);
-			PolyID = 0;
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("NEXT SITE"))
-		{
-			SiteID = FMath::Clamp(SiteID + 1, 0, N - 1);
-			PolyID = 0;
-		}
-		if (bDebugVHEs)
-		{
-			ImGui::Text("CURRENT SITE ID: %d", SiteID);
-			ImGui::Text("VHEs in Site: %d", VoronoiHalfEdges_Map[SiteID].Num());
-			int32 NumPolys = VoronoiHalfEdges_Map[SiteID].Num();
-			if (ImGui::Button("PREV VHE"))
-			{
-				PolyID = (PolyID - 1 + NumPolys) % NumPolys;
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("NEXT VHE"))
-			{
-				PolyID = (PolyID + 1) % NumPolys;
-			}
-			ImGui::Text("CURRENT POLY ID: %d", PolyID);
-			if (VoronoiHalfEdges_Map[SiteID].IsValidIndex(PolyID))
-			{
-				const FVoronoiHalfEdge& VHE = VoronoiHalfEdges_Map[SiteID][PolyID];
-				ImGui::Text("VHE Start: %d", VHE.VHE_Start);
-				ImGui::Text("VHE End: %d", VHE.VHE_End);
-				ImGui::Text("VHE Start Face: %d (Current Site)", VHE.Start_Face);
-				ImGui::Text("VHE End Face: %d", VHE.End_Face);
-				// DEBUG DRAW CURRENT VHE
-				DrawDebugSphere(GetWorld(), Location + VoronoiGeoCenters[VHE.VHE_Start] * PlanetRadius, 20, 20, FColor::Green, false, DeltaTime);
-				DrawDebugString(GetWorld(), Location + VoronoiGeoCenters[VHE.VHE_Start] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VHE START: %d"), VHE.VHE_Start), nullptr, FColor::White, DeltaTime);
-				DrawDebugSphere(GetWorld(), Location + VoronoiGeoCenters[VHE.VHE_End] * PlanetRadius, 20, 20, FColor::Blue, false, DeltaTime);
-				DrawDebugString(GetWorld(), Location + VoronoiGeoCenters[VHE.VHE_End] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VHE END: %d"), VHE.VHE_End), nullptr, FColor::White, DeltaTime);
-				DrawDebugLine(GetWorld(),
-					Location + VoronoiGeoCenters[VHE.VHE_Start] * PlanetRadius,
-					Location + VoronoiGeoCenters[VHE.VHE_End] * PlanetRadius,
-					FColor::Red, false, 1.f / 20.f, 0, DebugLineThickness+3);
-				DrawDebugSphere(GetWorld(), Location + FibonacciPoints[VHE.Start_Face] * PlanetRadius, 20, 20, FColor::Red, false, DeltaTime);
-				DrawDebugString(GetWorld(), Location + FibonacciPoints[VHE.Start_Face] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VHE START FACE: %d"), VHE.Start_Face), nullptr, FColor::White, DeltaTime);
-				DrawDebugSphere(GetWorld(), Location + FibonacciPoints[VHE.End_Face] * PlanetRadius, 20, 20, FColor::Red, false, DeltaTime);
-				DrawDebugString(GetWorld(), Location + FibonacciPoints[VHE.End_Face] * PlanetRadius + FVector(0, 0, 30), FString::Printf(TEXT("VHE END: %d"), VHE.VHE_End), nullptr, FColor::White, DeltaTime);
-				DrawDebugLine(GetWorld(),
-					Location + FibonacciPoints[VHE.Start_Face] * PlanetRadius,
-					Location + FibonacciPoints[VHE.End_Face] * PlanetRadius,
-					FColor::Orange, false, 1.f / 20.f, 0, DebugLineThickness+3);
-			}
-		}
-	}
-	ImGui::End();
-#pragma endregion DRAW_VORONOI_DEBUG_WINDOW
-
 #pragma region CBT_DEBUG_WINDOW
 	static int32 CurrentHalfEdge = 0;
+	static int32 CurrentFace = 0;
 	// CURRENT HALF EDGE NAVIGATION BOOLEAN DEBUGs
 	static bool bHE_Vert = false;
 	static bool bHE_Face = false;
@@ -1635,16 +1641,78 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 			ImGui::Separator();
 			ImGui::Dummy(ImVec2(0.0f, 7.0f));
 
-			if (ImGui::Button("PREV"))
+			// Half-edges of one Voronoi cell are SitePrefixSums[face] .. + ring size.
+			auto CellRange = [this](int32 Face, int32& OutBegin, int32& OutCount)
 			{
-				CurrentHalfEdge = FMath::Clamp(CurrentHalfEdge - 1, 0, HalfEdge_Buffer.Num() - 1);
+				OutBegin = 0;
+				OutCount = 0;
+				if (!SitePrefixSums.IsValidIndex(Face) || !VoronoiHalfEdges_Map.IsValidIndex(Face))
+				{
+					return;
+				}
+				OutBegin = SitePrefixSums[Face];
+				OutCount = VoronoiHalfEdges_Map[Face].Num();
+			};
+			auto StepFace = [&](int32 Dir)
+			{
+				if (N <= 0)
+				{
+					return;
+				}
+				for (int32 Step = 0; Step < N; ++Step)
+				{
+					CurrentFace = (CurrentFace + Dir + N) % N;
+					int32 Begin = 0;
+					int32 Count = 0;
+					CellRange(CurrentFace, Begin, Count);
+					if (Count > 0 && HalfEdge_Buffer.IsValidIndex(Begin))
+					{
+						CurrentHalfEdge = Begin;
+						return;
+					}
+				}
+			};
+
+			if (ImGui::Button("FACE PREV"))
+			{
+				StepFace(-1);
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("FACE NEXT"))
+			{
+				StepFace(1);
 			}
 
-			ImGui::SameLine();
-
-			if (ImGui::Button("NEXT"))
+			if (ImGui::Button("VHE PREV"))
 			{
-				CurrentHalfEdge = FMath::Clamp(CurrentHalfEdge + 1, 0, HalfEdge_Buffer.Num() - 1);
+				int32 Begin = 0;
+				int32 Count = 0;
+				CellRange(CurrentFace, Begin, Count);
+				if (Count > 0)
+				{
+					int32 Local = CurrentHalfEdge - Begin;
+					if (Local < 0 || Local >= Count)
+					{
+						Local = 0;
+					}
+					CurrentHalfEdge = Begin + (Local - 1 + Count) % Count;
+				}
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("VHE NEXT"))
+			{
+				int32 Begin = 0;
+				int32 Count = 0;
+				CellRange(CurrentFace, Begin, Count);
+				if (Count > 0)
+				{
+					int32 Local = CurrentHalfEdge - Begin;
+					if (Local < 0 || Local >= Count)
+					{
+						Local = 0;
+					}
+					CurrentHalfEdge = Begin + (Local + 1) % Count;
+				}
 			}
 
 			// --- Start two columns ---
