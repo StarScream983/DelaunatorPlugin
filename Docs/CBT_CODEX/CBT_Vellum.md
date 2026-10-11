@@ -16,5 +16,4 @@ Root index is `j = NumLeaves + h`, and `NumLeaves` is `1 << D` from the existing
 
 Not yet: merge, Algorithm 8 free-slot reuse, pointer buffer, the repo's multi-edge compatibility chain in one update.
 
-i have thought about cpu-gpu synchronisation, let's do this thought experiment:
-on the GPU: we have 2 mirrored sets of CBT buffers
+if i do CBT buffers size at D = Ceillog2(H)+d, then 2^D and 2^(D+1) to increase size and make room for more subdiv depth, if we use same CBT scheme will it work

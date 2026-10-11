@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<title>Foliage neighbors</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0c10; color:#ddd; font-family:monospace; height:100vh; display:flex; flex-direction:column; }
+header { padding:14px 18px 8px; display:flex; flex-direction:column; gap:8px; }
+h1 { font-size:16px; color:#d7e6f5; font-weight:600; }
+p { color:#8aa; font-size:13px; line-height:1.45; max-width:920px; }
+.controls { display:flex; flex-wrap:wrap; gap:18px 28px; align-items:flex-end; }
+label { color:#8aa; font-size:12px; display:flex; flex-direction:column; gap:4px; min-width:180px; }
+label span { display:flex; flex-direction:row; align-items:baseline; gap:8px; }
+label b { color:#6af; }
+input[type=range] { width:180px; accent-color:#6af; }
+#counter { color:#f2f6fb; font-size:28px; font-weight:700; letter-spacing:0.02em; }
+#bases { color:#9ec4e4; font-size:18px; }
+#wrap { flex:1; min-height:0; padding:8px 12px 14px; }
+canvas { width:100%; height:100%; display:block; }
+</style>
+</head>
+<body>
+<header>
+  <div class="controls">
+    <label><span>Base subdivisions <b id="vBase">1</b></span>
+      <input id="slBase" type="range" min="0" max="4" value="1" step="1">
+    </label>
+    <label><span>LOD depth <b id="vLod">2</b></span>
+      <input id="slLod" type="range" min="0" max="4" value="2" step="1">
+    </label>
+    <div id="counter">Tests for this triangle: —</div>
+    <div id="bases">A 0 · B 0 · C 0</div>
+  </div>
+</header>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+const cv = document.getElementById('cv');
+const g = cv.getContext('2d');
+const corner = [[1, 2], [2, 0], [0, 1]];
+const SEED = 0xABCD1234;
+const STOP = 0.4;
+const TEST_CAP = 2000000;
+let bases = [];
+let stars = new Map();
+let hover = null;
+let tests = 0;
+let capped = false;
+let counting = false;
+let leafCount = 0;
+let _rng = 0;
+
+function hash(n) {
+  n = (n ^ 61) ^ (n >>> 16);
+  n = (n + (n << 3)) | 0;
+  n ^= n >>> 4;
+  n = Math.imul(n, 0x27d4eb2d);
+  n ^= n >>> 15;
+  return (n >>> 0) / 4294967296;
+}
+function rng() { return hash((++_rng) ^ SEED); }
+function bump(n) {
+  if (!counting || capped) return;
+  tests += n;
+  if (tests >= TEST_CAP) capped = true;
+}
+
+function mid(a, b) { return { x:(a.x + b.x) * 0.5, y:(a.y + b.y) * 0.5 }; }
+function near(a, b) { return Math.hypot(a.x - b.x, a.y - b.y) < 0.01; }
+function edgePts(t, e) { return [t.v[(e + 1) % 3], t.v[(e + 2) % 3]]; }
+
+function makeTri(v, base, depth) {
+  return {
+    v, base, depth, child: null,
+    n: [null, null, null], ne: [0, 1, 2], flip: [false, false, false],
+    t0: [0, 0, 0], t1: [1, 1, 1], pier: [null, null, null]
+  };
+}
+
+function edgeDirFlip(t, e, nb, ne) {
+  const [a, b] = edgePts(t, e);
+  const [c, d] = edgePts(nb, ne);
+  return near(a, d) && near(b, c);
+}
+
+function pointAt(t, e, nb, ne, t0, t1, flip) {
+  t.n[e] = nb;
+  t.ne[e] = ne;
+  t.flip[e] = flip;
+  t.t0[e] = t0;
+  t.t1[e] = t1;
+}
+
+function linkBoth(a, ea, b, eb) {
+  const flip = edgeDirFlip(a, ea, b, eb);
+  pointAt(a, ea, b, eb, 0, 1, flip);
+  pointAt(b, eb, a, ea, 0, 1, flip);
+}
+
+function findEdge(t, p, q) {
+  for (let e = 0; e < 3; e++) {
+    const [a, b] = edgePts(t, e);
+    if ((near(a, p) && near(b, q)) || (near(a, q) && near(b, p))) return e;
+  }
+  return -1;
+}
+
+function bindShared(a, b) {
+  for (let e = 0; e < 3; e++) {
+    const [p, q] = edgePts(a, e);
+    const e2 = findEdge(b, p, q);
+    if (e2 >= 0) { linkBoth(a, e, b, e2); return; }
+  }
+}
+
+function split(t) {
+  if (t.child) return;
+  const [a, b, c] = t.v;
+  const mab = mid(a, b), mbc = mid(b, c), mca = mid(c, a);
+  const c0 = makeTri([a, mab, mca], t.base, t.depth + 1);
+  const c1 = makeTri([b, mbc, mab], t.base, t.depth + 1);
+  const c2 = makeTri([c, mca, mbc], t.base, t.depth + 1);
+  const c3 = makeTri([mab, mbc, mca], t.base, t.depth + 1);
+  t.child = [c0, c1, c2, c3];
+  const pierOn = (edge) => {
+    const N = t.n[edge];
+    if (!N) return null;
+    return { nb: N, ne: t.ne[edge], t: (t.t0[edge] + t.t1[edge]) * 0.5 };
+  };
+  const pAB = pierOn(2), pBC = pierOn(0), pCA = pierOn(1);
+  c0.pier = [t.pier[0], pAB, pCA];
+  c1.pier = [t.pier[1], pBC, pAB];
+  c2.pier = [t.pier[2], pCA, pBC];
+  c3.pier = [pAB, pBC, pCA];
+  linkBoth(c0, 0, c3, 1);
+  linkBoth(c1, 0, c3, 2);
+  linkBoth(c2, 0, c3, 0);
+  attachOuter(t, 0, c1, 2, 0);
+  attachOuter(t, 0, c2, 1, 1);
+  attachOuter(t, 1, c2, 2, 0);
+  attachOuter(t, 1, c0, 1, 1);
+  attachOuter(t, 2, c0, 2, 0);
+  attachOuter(t, 2, c1, 1, 1);
+}
+
+function attachOuter(parent, pe, child, ce, half) {
+  const N = parent.n[pe];
+  if (!N) return;
+  const e2 = parent.ne[pe];
+  const flip = parent.flip[pe];
+  const p0 = parent.t0[pe], p1 = parent.t1[pe];
+  const mid = (p0 + p1) * 0.5;
+  const a0 = !flip ? (half === 0 ? p0 : mid) : (half === 0 ? mid : p0);
+  const a1 = !flip ? (half === 0 ? mid : p1) : (half === 0 ? p1 : mid);
+  pointAt(child, ce, N, e2, a0, a1, flip);
+}
+
+function leaves(t, out) {
+  if (!t.child) { out.push(t); return; }
+  for (const c of t.child) leaves(c, out);
+}
+
+function allLeaves() {
+  const out = [];
+  for (const b of bases) leaves(b, out);
+  return out;
+}
+
+function segOverlap(a, b, c, d) {
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const len = Math.hypot(abx, aby);
+  if (len < 1e-6) return 0;
+  const ux = abx / len, uy = aby / len;
+  const dist = (p) => Math.abs((p.x - a.x) * uy - (p.y - a.y) * ux);
+  if (dist(c) > 0.8 || dist(d) > 0.8) return 0;
+  let t0 = (c.x - a.x) * ux + (c.y - a.y) * uy;
+  let t1 = (d.x - a.x) * ux + (d.y - a.y) * uy;
+  if (t0 > t1) { const s = t0; t0 = t1; t1 = s; }
+  return Math.max(0, Math.min(len, t1) - Math.max(0, t0));
+}
+
+function overlapsEdge(seg, tri) {
+  for (let e = 0; e < 3; e++) {
+    bump(1);
+    const [c, d] = edgePts(tri, e);
+    if (segOverlap(seg[0], seg[1], c, d) > 1) return true;
+  }
+  return false;
+}
+
+function collectTouching(nb, seg, out, seen) {
+  if (!nb || capped) return;
+  bump(1);
+  if (nb.child) {
+    for (const ch of nb.child) collectTouching(ch, seg, out, seen);
+    return;
+  }
+  if (seen.has(nb) || !overlapsEdge(seg, nb)) return;
+  seen.add(nb);
+  out.push(nb);
+}
+
+function vkey(p) {
+  return Math.round(p.x * 100) + ',' + Math.round(p.y * 100);
+}
+
+function buildStars() {
+  stars = new Map();
+  for (const t of allLeaves()) {
+    for (const p of t.v) {
+      const k = vkey(p);
+      let list = stars.get(k);
+      if (!list) { list = []; stars.set(k, list); }
+      list.push(t);
+    }
+  }
+}
+
+function descend(nb, e2, t0, t1, out) {
+  if (!nb || capped) return;
+  bump(1);
+  if (!nb.child) { out.push(nb); return; }
+  const lo = t0 < 0.5 - 1e-9 || Math.abs(t0 - 0.5) < 1e-6;
+  const hi = t1 > 0.5 + 1e-9 || Math.abs(t1 - 0.5) < 1e-6;
+  if (lo) descend(nb.child[corner[e2][0]], 2, t0 * 2, Math.min(t1, 0.5) * 2, out);
+  if (hi) descend(nb.child[corner[e2][1]], 1, Math.max(t0, 0.5) * 2 - 1, t1 * 2 - 1, out);
+}
+
+function leavesAcross(tri, e) {
+  const nb = tri.n[e];
+  if (!nb) return [];
+  const out = [];
+  descend(nb, tri.ne[e], tri.t0[e], tri.t1[e], out);
+  return out;
+}
+
+function edgeLength(a, b) {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function paramOn(p, a, b) {
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const len2 = abx * abx + aby * aby;
+  if (len2 < 1e-8) return 0;
+  return ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2;
+}
+
+function onSegment(p, a, b) {
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const len = Math.hypot(abx, aby);
+  if (len < 1e-6) return false;
+  const ux = abx / len, uy = aby / len;
+  if (Math.abs((p.x - a.x) * uy - (p.y - a.y) * ux) > 0.75) return false;
+  const t = (p.x - a.x) * ux + (p.y - a.y) * uy;
+  return t >= -0.5 && t <= len + 0.5;
+}
+
+function trianglesOnEdge(tri, e) {
+  const [a, b] = edgePts(tri, e);
+  const hoveredLen = edgeLength(a, b);
+  const out = [];
+  const seen = new Set();
+  const seenPt = new Set();
+  const queue = [a, b];
+  while (queue.length) {
+    const origin = queue.pop();
+    const pk = vkey(origin);
+    if (seenPt.has(pk)) continue;
+    seenPt.add(pk);
+    const list = stars.get(pk) || [];
+    for (const n of list) {
+      bump(1);
+      if (n === tri || seen.has(n)) continue;
+      let take = false;
+      for (let f = 0; f < 3; f++) {
+        const [c, d] = edgePts(n, f);
+        const cOn = onSegment(c, a, b);
+        const dOn = onSegment(d, a, b);
+        if (cOn && !seenPt.has(vkey(c))) queue.push(c);
+        if (dOn && !seenPt.has(vkey(d))) queue.push(d);
+        if (!cOn || !dOn) continue;
+        const len = edgeLength(c, d);
+        if (len > 0.5 && len + 0.5 < hoveredLen) take = true;
+      }
+      if (!take) continue;
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+function pointsOnEdge(tri, e) {
+  const [a, b] = edgePts(tri, e);
+  const out = [];
+  const seen = new Set();
+  const seenPt = new Set();
+  const queue = [a, b];
+  while (queue.length) {
+    const origin = queue.pop();
+    const pk = vkey(origin);
+    if (seenPt.has(pk)) continue;
+    seenPt.add(pk);
+    const list = stars.get(pk) || [];
+    for (const n of list) {
+      bump(1);
+      if (n !== tri && !seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+      for (const p of n.v) {
+        if (!onSegment(p, a, b)) continue;
+        if (!seenPt.has(vkey(p))) queue.push(p);
+      }
+    }
+  }
+  return out;
+}
+
+function shorterPieces(tri, e) {
+  const [a, b] = edgePts(tri, e);
+  const hoveredLen = edgeLength(a, b);
+  const across = leavesAcross(tri, e);
+  const shorter = [];
+  for (const n of across) {
+    bump(1);
+    for (let f = 0; f < 3; f++) {
+      const [c, d] = edgePts(n, f);
+      if (!onSegment(c, a, b) || !onSegment(d, a, b)) continue;
+      if (edgeLength(c, d) + 0.5 < hoveredLen) {
+        shorter.push(n);
+        break;
+      }
+    }
+  }
+  return shorter.length ? shorter : across;
+}
+
+function neighborsOf(tri) {
+  const seen = new Set();
+  const out = [];
+  const add = (n) => { if (n && n !== tri && !seen.has(n)) { seen.add(n); out.push(n); } };
+  for (const p of tri.v) {
+    const list = stars.get(vkey(p));
+    if (!list) continue;
+    for (const n of list) { bump(1); add(n); }
+  }
+  for (let e = 0; e < 3; e++) {
+    for (const n of shorterPieces(tri, e)) add(n);
+    for (const n of pointsOnEdge(tri, e)) add(n);
+  }
+  for (const pier of tri.pier) {
+    if (!pier) continue;
+    const hit = [];
+    descend(pier.nb, pier.ne, pier.t, pier.t, hit);
+    for (const n of hit) add(n);
+  }
+  return out;
+}
+
+function uniformLevels(n) {
+  for (let i = 0; i < n; i++) {
+    const layer = allLeaves();
+    for (const t of layer) split(t);
+  }
+}
+
+function lodSplit(t, depth, maxD) {
+  if (depth >= maxD || rng() < STOP) return;
+  split(t);
+  for (const c of t.child) lodSplit(c, depth + 1, maxD);
+}
+
+function countAll() {
+  tests = 0;
+  capped = false;
+  counting = true;
+  const ls = allLeaves();
+  leafCount = ls.length;
+  for (const t of ls) {
+    neighborsOf(t);
+    if (capped) break;
+  }
+  counting = false;
+  const shown = capped ? '2,000,000+' : tests.toLocaleString('en-US');
+  document.getElementById('counter').textContent =
+    'Neighbor tests: ' + shown + '    Leaves: ' + leafCount.toLocaleString('en-US');
+}
+
+function build() {
+  const W = cv.width, H = cv.height;
+  const margin = 48;
+  const usableW = W - margin * 2;
+  const side = Math.min(usableW / 2, (H - 120) / 0.866);
+  const height = side * 0.866;
+  const x0 = (W - side * 2) * 0.5;
+  const y1 = (H - height) * 0.5 + 10;
+  const y0 = y1 + height;
+  const P0 = { x:x0, y:y0 };
+  const P1 = { x:x0 + side * 0.5, y:y1 };
+  const P2 = { x:x0 + side, y:y0 };
+  const P3 = { x:x0 + side * 1.5, y:y1 };
+  const P4 = { x:x0 + side * 2, y:y0 };
+  const A = makeTri([P0, P2, P1], 'A', 0);
+  const B = makeTri([P2, P3, P1], 'B', 0);
+  const C = makeTri([P2, P4, P3], 'C', 0);
+  bases = [A, B, C];
+  bindShared(A, B);
+  bindShared(B, C);
+  uniformLevels(+document.getElementById('slBase').value);
+  _rng = 0;
+  const lod = +document.getElementById('slLod').value;
+  for (const t of allLeaves()) lodSplit(t, 0, lod);
+  buildStars();
+  const counts = { A: 0, B: 0, C: 0 };
+  for (const t of allLeaves()) counts[t.base]++;
+  leafCount = counts.A + counts.B + counts.C;
+  const basesEl = document.getElementById('bases');
+  if (basesEl) basesEl.textContent = 'A ' + counts.A + '   B ' + counts.B + '   C ' + counts.C;
+}
+
+function contains(t, p) {
+  const [a, b, c] = t.v;
+  const v0x = c.x - a.x, v0y = c.y - a.y;
+  const v1x = b.x - a.x, v1y = b.y - a.y;
+  const v2x = p.x - a.x, v2y = p.y - a.y;
+  const d00 = v0x * v0x + v0y * v0y;
+  const d01 = v0x * v1x + v0y * v1y;
+  const d11 = v1x * v1x + v1y * v1y;
+  const d02 = v0x * v2x + v0y * v2y;
+  const d12 = v1x * v2x + v1y * v2y;
+  const inv = 1 / (d00 * d11 - d01 * d01);
+  const u = (d11 * d02 - d01 * d12) * inv;
+  const v = (d00 * d12 - d01 * d02) * inv;
+  return u >= -0.001 && v >= -0.001 && (1 - u - v) >= -0.001;
+}
+
+function hit(p) {
+  const ls = allLeaves();
+  let best = null, bestA = Infinity;
+  for (const t of ls) {
+    if (!contains(t, p)) continue;
+    const area = Math.abs((t.v[1].x - t.v[0].x) * (t.v[2].y - t.v[0].y) - (t.v[2].x - t.v[0].x) * (t.v[1].y - t.v[0].y));
+    if (area < bestA) { bestA = area; best = t; }
+  }
+  return best;
+}
+
+function poly(t) {
+  g.beginPath();
+  g.moveTo(t.v[0].x, t.v[0].y);
+  g.lineTo(t.v[1].x, t.v[1].y);
+  g.lineTo(t.v[2].x, t.v[2].y);
+  g.closePath();
+}
+
+function centroid(t) {
+  return { x:(t.v[0].x + t.v[1].x + t.v[2].x) / 3, y:(t.v[0].y + t.v[1].y + t.v[2].y) / 3 };
+}
+
+function draw() {
+  const W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = '#0a0c10';
+  g.fillRect(0, 0, W, H);
+  let ns = [];
+  let hoverTests = 0;
+  if (hover) {
+    tests = 0;
+    capped = false;
+    counting = true;
+    ns = neighborsOf(hover);
+    counting = false;
+    hoverTests = tests;
+  }
+  document.getElementById('counter').textContent = hover
+    ? 'Tests for this triangle: ' + hoverTests.toLocaleString('en-US')
+    : 'Tests for this triangle: —';
+  const nset = new Set(ns);
+  for (const t of allLeaves()) {
+    poly(t);
+    if (t === hover) g.fillStyle = '#16324a';
+    else if (nset.has(t)) g.fillStyle = '#3a2614';
+    else g.fillStyle = '#12180e';
+    g.fill();
+    g.lineWidth = 1;
+    g.strokeStyle = '#314356';
+    g.stroke();
+  }
+  if (hover) {
+    for (const t of ns) { poly(t); g.lineWidth = 2.5; g.strokeStyle = '#e09040'; g.stroke(); }
+    poly(hover); g.lineWidth = 2.5; g.strokeStyle = '#6af'; g.stroke();
+  }
+  g.lineWidth = 2;
+  g.strokeStyle = '#7aa0c4';
+  for (const b of bases) { poly(b); g.stroke(); }
+  g.font = '16px monospace';
+  g.fillStyle = '#9ec4e4';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  for (const b of bases) {
+    const c = centroid(b);
+    const minY = Math.min(b.v[0].y, b.v[1].y, b.v[2].y);
+    g.fillText(b.base, c.x, minY - 16);
+  }
+}
+
+function resize() {
+  const r = cv.parentElement.getBoundingClientRect();
+  cv.width = Math.max(320, r.width);
+  cv.height = Math.max(280, r.height);
+  build();
+  draw();
+}
+
+cv.addEventListener('mousemove', (ev) => {
+  const r = cv.getBoundingClientRect();
+  const p = { x:(ev.clientX - r.left) * cv.width / r.width, y:(ev.clientY - r.top) * cv.height / r.height };
+  const next = hit(p);
+  if (next !== hover) { hover = next; draw(); }
+});
+cv.addEventListener('mouseleave', () => { hover = null; draw(); });
+[['slBase', 'vBase'], ['slLod', 'vLod']].forEach(([sid, vid]) => {
+  const sl = document.getElementById(sid);
+  const vl = document.getElementById(vid);
+  sl.addEventListener('input', () => { vl.textContent = sl.value; resize(); });
+});
+window.addEventListener('resize', resize);
+resize();
+</script>
+</body>
+</html>

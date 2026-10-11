@@ -1,0 +1,10 @@
+# FOLIAGE GOALS
+
+The global goals of this system is to generate foliage depending on environment conditions and proximity, mimicing star citizen's foliage system, we'll take into account sunlight distribution, humidity temperature, soil type and soil depth (types of nutrients and amount of nutrients), while giving a distance proximity for each foliage type(how much space there is between same type).
+
+---
+
+But the immediate major objectives of this system are:
+- generate major foliage and minor foliage with proximity conditions and density based on noise (noise for each foliage type)
+- generate a barycentric subdivision scheme for spacial awareness, so foliage objects are aware of their surroundings, and we will be able to determine distance between same type and different types accordint to rules and conditions
+- each foliage type will have its own basic noise, no need for FBM or warp,

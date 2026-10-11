@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<title>FOL System</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0c10; color:#ddd; font-family:monospace; display:flex; height:100vh; }
+aside { width:260px; flex-shrink:0; background:#111418; border-right:1px solid #222; padding:14px; display:flex; flex-direction:column; gap:7px; font-size:12px; overflow-y:auto; }
+#cvwrap { flex:1; padding:6px; }
+canvas { width:100%; height:100%; display:block; }
+label { display:flex; justify-content:space-between; color:#888; margin-bottom:2px; }
+label b { color:#6af; }
+input[type=range] { width:100%; accent-color:#6af; }
+.sec { color:#6af; font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-top:4px; }
+hr { border:none; border-top:1px solid #1a1e26; }
+.toggle-row { display:flex; align-items:center; justify-content:space-between; padding:3px 0; color:#778; font-size:11px; }
+.sw { position:relative; width:36px; height:18px; flex-shrink:0; }
+.sw input { opacity:0; width:0; height:0; }
+.sw-t { position:absolute; inset:0; background:#1a1e26; border-radius:18px; cursor:pointer; border:1px solid #2a3040; }
+.sw-t:before { content:''; position:absolute; width:12px; height:12px; left:2px; top:2px; background:#3a4050; border-radius:50%; transition:.15s; }
+.sw input:checked+.sw-t { background:#1a3050; }
+.sw input:checked+.sw-t:before { transform:translateX(18px); background:#6af; }
+.dm-btn { background:#1a2030; color:#668; border:1px solid #2a3040; padding:5px 8px; border-radius:5px; cursor:pointer; font-size:10px; font-family:monospace; text-align:left; width:100%; margin-top:2px; }
+.dm-btn.active { background:#1a3050; color:#6af; border-color:#4a7aaa; }
+button.seed-btn { background:#1a2030; color:#ccc; border:1px solid #333; padding:8px; border-radius:7px; cursor:pointer; font-weight:bold; width:100%; }
+#stats { font-size:10px; color:#556; line-height:1.8; white-space:pre; }
+.leg { display:flex; align-items:center; gap:7px; font-size:11px; color:#668; }
+.lsq { width:10px; height:10px; border-radius:2px; flex-shrink:0; }
+.ldo { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+</style>
+</head>
+<body>
+<aside>
+  <b style="color:#6af;font-size:13px">FOL System</b>
+  <hr>
+
+  <div class="sec">Major FOL (Trees / Boulders)</div>
+  <div><label>Base subdivisions <b id="vBD">3</b></label>
+    <input id="sl_bd" type="range" min="1" max="6" value="3"></div>
+  <div><label>LOD depth <b id="vLD">2</b></label>
+    <input id="sl_ld" type="range" min="1" max="5" value="2"></div>
+  <div><label>Claim prob / level <b id="vCP">0.40</b></label>
+    <input id="sl_cp" type="range" min="0.05" max="1.0" step="0.01" value="0.40"></div>
+  <div><label>Noise cell size <b id="vMS">220</b></label>
+    <input id="sl_ms" type="range" min="60" max="600" value="220"></div>
+
+  <hr>
+  <div class="sec">Minor FOL — Pure Barycentric</div>
+  <div><label>Budget (candidates) <b id="vBU">8000</b></label>
+    <input id="sl_bu" type="range" min="500" max="40000" step="500" value="8000"></div>
+  <div><label>Noise cell size <b id="vNS">160</b></label>
+    <input id="sl_ns" type="range" min="30" max="500" value="160"></div>
+  <div><label>Cluster size <b id="vCR">12</b></label>
+    <input id="sl_cr" type="range" min="1" max="40" value="12"></div>
+  <div><label>Density steps <b id="vDS">4</b></label>
+    <input id="sl_ds" type="range" min="2" max="8" value="4"></div>
+  <div><label>Fav strength <b id="vFS">1.0</b></label>
+    <input id="sl_fs" type="range" min="0" max="3" step="0.1" value="1.0"></div>
+
+  <hr>
+  <div class="sec">Density map preview</div>
+  <button class="dm-btn active" id="dm_OFF"     onclick="setDMap('OFF')"    >Off — show foliage</button>
+  <button class="dm-btn"        id="dm_TREE"    onclick="setDMap('TREE')"   >Tree density</button>
+  <button class="dm-btn"        id="dm_BOULDER" onclick="setDMap('BOULDER')">Boulder density</button>
+  <button class="dm-btn"        id="dm_GRASS"   onclick="setDMap('GRASS')"  >Grass density</button>
+  <button class="dm-btn"        id="dm_GRAVEL"  onclick="setDMap('GRAVEL')" >Gravel density</button>
+  <button class="dm-btn"        id="dm_FERN"    onclick="setDMap('FERN')"   >Fern density</button>
+  <button class="dm-btn"        id="dm_FLOWER"  onclick="setDMap('FLOWER')" >Flower density</button>
+
+  <hr>
+  <div class="sec">Layers (draw only)</div>
+  <div class="toggle-row">Base grid tris <label class="sw"><input type="checkbox" id="tg_base"><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Major LOD tris <label class="sw"><input type="checkbox" id="tg_lod"><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Trees          <label class="sw"><input type="checkbox" id="tg_tree" checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Boulders       <label class="sw"><input type="checkbox" id="tg_boul" checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Grass          <label class="sw"><input type="checkbox" id="tg_grs"  checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Gravel         <label class="sw"><input type="checkbox" id="tg_grv"  checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Ferns          <label class="sw"><input type="checkbox" id="tg_frn"  checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Flowers        <label class="sw"><input type="checkbox" id="tg_flw"  checked><span class="sw-t"></span></label></div>
+
+  <hr>
+  <div class="sec">Legend</div>
+  <div class="leg"><div class="lsq" style="background:#3a9a50"></div>Tree</div>
+  <div class="leg"><div class="lsq" style="background:#8a6030"></div>Boulder</div>
+  <div class="leg"><div class="ldo" style="background:#4a9a30"></div>Grass</div>
+  <div class="leg"><div class="ldo" style="background:#9a8060"></div>Gravel</div>
+  <div class="leg"><div class="ldo" style="background:#1a7a50"></div>Fern</div>
+  <div class="leg"><div class="ldo" style="background:#e06ad0"></div>Flower</div>
+
+  <hr>
+  <button class="seed-btn" onclick="newSeed()">&#x21BA; New seed</button>
+  <div id="stats"></div>
+</aside>
+<div id="cvwrap"><canvas id="cv"></canvas></div>
+
+<script>
+const cv = document.getElementById('cv');
+const g  = cv.getContext('2d');
+let SEED = 0xABCD1234;
+
+// ── hash / rng ───────────────────────────────────────────────────────────────
+function hash(n) {
+  n = (n ^ 61) ^ (n >>> 16); n += n << 3; n ^= n >>> 4;
+  n = Math.imul(n, 0x27d4eb2d); n ^= n >>> 15;
+  return (n >>> 0) / 4294967296;
+}
+let _rng = 0;
+function rng() { return hash((++_rng) ^ SEED); }
+
+// ── geometry ─────────────────────────────────────────────────────────────────
+function mid(a, b) { return { x:(a.x+b.x)*0.5, y:(a.y+b.y)*0.5 }; }
+
+// Correct uniform barycentric sampling — sqrt(r1) formula (fig6)
+function triPt(A, B, C, r1, r2) {
+  const s = Math.sqrt(r1);
+  return {
+    x: (1-s)*A.x + s*(1-r2)*B.x + s*r2*C.x,
+    y: (1-s)*A.y + s*(1-r2)*B.y + s*r2*C.y
+  };
+}
+function triArea(a, b, c) {
+  return Math.abs((b.x-a.x)*(c.y-a.y) - (c.x-a.x)*(b.y-a.y)) * 0.5;
+}
+
+// ── noise ────────────────────────────────────────────────────────────────────
+// Power curve baked in: low values collapse toward true 0 → real black zones
+function makeNoise(W, H, cellSz, seed) {
+  const cols = Math.ceil(W/cellSz)+2, rows = Math.ceil(H/cellSz)+2;
+  const grid = new Float32Array(cols * rows);
+  for (let i = 0; i < grid.length; i++) {
+    grid[i] = Math.pow(hash(seed + i*1000003 + seed*997), 2.2);
+  }
+  return { grid, cols, cellSz };
+}
+function sampleNoise(ng, x, y) {
+  const gx = x/ng.cellSz, gy = y/ng.cellSz;
+  const ix = Math.floor(gx)|0, iy = Math.floor(gy)|0;
+  const fx = gx-ix, fy = gy-iy, c = ng.cols;
+  const v00=ng.grid[ iy   *c+ix  ]||0, v10=ng.grid[ iy   *c+ix+1]||0;
+  const v01=ng.grid[(iy+1)*c+ix  ]||0, v11=ng.grid[(iy+1)*c+ix+1]||0;
+  const ux = fx*fx*(3-2*fx), uy = fy*fy*(3-2*fy);
+  return v00*(1-ux)*(1-uy) + v10*ux*(1-uy) + v01*(1-ux)*uy + v11*ux*uy;
+}
+// Discrete step: returns 0..steps-1. 0 = black zone.
+function stepNoise(v, steps) {
+  return Math.min(steps-1, Math.floor(v * steps));
+}
+
+// ── type config ───────────────────────────────────────────────────────────────
+// sf = noise cell size multiplier → controls blob scale per type
+const TYPE_CFG = {
+  TREE:   { seed:0xA1B2C3D4, sf:2.50, col:[58,154,80],   r:10,  dotCol:'#3a9a50' },
+  BOULDER:{ seed:0x11223344, sf:1.80, col:[138,96,48],   r:9,   dotCol:'#8a6030' },
+  GRASS:  { seed:0x55AA77BB, sf:1.20, col:[74,154,48],   r:1.5, dotCol:'#4a9a30' },
+  GRAVEL: { seed:0xCC334455, sf:0.90, col:[154,128,96],  r:1.0, dotCol:'#9a8060' },
+  FERN:   { seed:0x66FF2211, sf:0.55, col:[26,122,80],   r:2.5, dotCol:'#1a7a50' },
+  FLOWER: { seed:0xEE1199AA, sf:0.30, col:[224,106,208], r:2.0, dotCol:'#e06ad0' },
+};
+
+// Favoritism: lowers the effective spawn threshold near a major dot
+// bonusThreshold > 0 means the type can spawn in darker (lower band) zones nearby
+// bonusThreshold < 0 means the type needs a brighter zone to spawn nearby (suppressed)
+const FAV = {
+  TREE: [
+    { m:'GRASS',  bonusThreshold:+0.8, sigma:1.8 }, // grass easier near trees
+    { m:'FERN',   bonusThreshold:+1.2, sigma:1.5 }, // fern strongly in tree shadow
+    { m:'FLOWER', bonusThreshold:+0.5, sigma:1.0 }, // some flowers near trees
+    { m:'GRAVEL', bonusThreshold:-1.5, sigma:0.8 }, // gravel suppressed near trees
+  ],
+  BOULDER: [
+    { m:'GRAVEL', bonusThreshold:+1.5, sigma:2.0 }, // gravel strongly near boulders
+    { m:'GRASS',  bonusThreshold:-1.5, sigma:1.0 }, // grass suppressed near boulders
+    { m:'FERN',   bonusThreshold:-1.0, sigma:0.8 }, // fern suppressed near boulders
+    { m:'FLOWER', bonusThreshold:+0.3, sigma:0.5 }, // slight flowers near boulders
+  ],
+};
+
+// ── module state ─────────────────────────────────────────────────────────────
+let noiseMaps  = {};
+let baseLeaves = [];
+let lodLeaves  = [];
+let majorDots  = [];  // { x, y, type, rad }
+let minorDots  = { GRASS:[], GRAVEL:[], FERN:[], FLOWER:[] };
+let activeDMap = 'OFF';
+let TRI_A, TRI_B, TRI_C;
+
+// ── MAJOR FOL: subdivision LOD claim ─────────────────────────────────────────
+function makeBaseGrid(A, B, C, depth) {
+  let leaves = [{a:A, b:B, c:C}];
+  for (let d = 0; d < depth; d++) {
+    const next = [];
+    for (const t of leaves) {
+      const mAB=mid(t.a,t.b), mBC=mid(t.b,t.c), mCA=mid(t.c,t.a);
+      next.push(
+        {a:t.a, b:mAB, c:mCA},
+        {a:mAB, b:t.b, c:mBC},
+        {a:mCA, b:mBC, c:t.c},
+        {a:mAB, b:mBC, c:mCA}
+      );
+    }
+    leaves = next;
+  }
+  return leaves;
+}
+
+function claimMajor(a, b, c, depth, maxD, prob) {
+  if (depth >= maxD || rng() < prob) {
+    const pos = triPt(a, b, c, rng(), rng());
+    const dT = sampleNoise(noiseMaps.TREE,    pos.x, pos.y);
+    const dB = sampleNoise(noiseMaps.BOULDER, pos.x, pos.y);
+    // Both types compete by weight, not by a hard max. A flat field (cell bigger
+    // than the triangle) used to hand every cell to whichever noise rolled higher.
+    const cand = [];
+    if (dT >= 0.25) cand.push({type:'TREE', d:dT});
+    if (dB >= 0.25) cand.push({type:'BOULDER', d:dB});
+    let best = null;
+    if (cand.length === 1) best = cand[0];
+    else if (cand.length > 1) {
+      let r = rng() * (cand[0].d + cand[1].d);
+      best = r <= cand[0].d ? cand[0] : cand[1];
+    }
+    if (best && rng() < best.d) {
+      lodLeaves.push({a,b,c,type:best.type});
+      majorDots.push({x:pos.x, y:pos.y, type:best.type, rad:Math.sqrt(triArea(a,b,c))*0.45});
+    } else {
+      lodLeaves.push({a,b,c,type:null});
+    }
+  } else {
+    const mAB=mid(a,b), mBC=mid(b,c), mCA=mid(c,a);
+    claimMajor(a,  mAB,mCA, depth+1,maxD,prob);
+    claimMajor(mAB,b,  mBC, depth+1,maxD,prob);
+    claimMajor(mCA,mBC,c,   depth+1,maxD,prob);
+    claimMajor(mAB,mBC,mCA, depth+1,maxD,prob);
+  }
+}
+
+// ── MINOR FOL: pure barycentric, NO subdivision ───────────────────────────────
+// Algorithm:
+//   1. Sample N candidates uniformly in triangle (sqrt(r1) formula)
+//   2. Sample noise at candidate → discrete step → band 0 = hard reject
+//   3. Favoritism from nearby major dots LOWERS the required band threshold
+//      (ferns can spawn in band 1 near a tree even if base threshold is band 2)
+//      Suppression RAISES the threshold.
+//   4. Density band drives cluster count — higher band = more instances spawned
+//   5. No minor spawn inside major dot exclusion radius (no overlap)
+function placeMinor(A, B, C, budget, clusterSize, steps, favStrength) {
+  minorDots = { GRASS:[], GRAVEL:[], FERN:[], FLOWER:[] };
+  const minorTypes = ['GRASS','GRAVEL','FERN','FLOWER'];
+  const baseThreshold = 1; // band must be >= 1 to spawn (band 0 = black = never)
+
+  for (const type of minorTypes) {
+    const nm = noiseMaps[type];
+    for (let i = 0; i < budget; i++) {
+      // Deterministic uniform point in triangle (sqrt(r1) formula)
+      const r1 = hash(SEED ^ (type.charCodeAt(0)*999983) ^ (i*1000003));
+      const r2 = hash(SEED ^ (type.charCodeAt(0)*999979) ^ (i*999979 + 7));
+      const pos = triPt(A, B, C, r1, r2);
+
+      // Step 1: sample and discrete-step the noise
+      const raw  = sampleNoise(nm, pos.x, pos.y);
+      const band = stepNoise(raw, steps); // 0..steps-1
+
+      // Step 2: compute favoritism threshold delta from nearby major dots
+      // positive = threshold lowered (easier to spawn = shadow/shelter effect)
+      // negative = threshold raised (harder to spawn = suppression)
+      let thresholdDelta = 0;
+      for (const md of majorDots) {
+        if (!md.type) continue;
+        for (const fav of (FAV[md.type] || [])) {
+          if (fav.m !== type) continue;
+          const dist  = Math.hypot(pos.x - md.x, pos.y - md.y);
+          const sigma = md.rad * fav.sigma;
+          const influence = Math.exp(-(dist*dist) / (2*sigma*sigma));
+          thresholdDelta += fav.bonusThreshold * influence * favStrength;
+        }
+      }
+
+      // Effective threshold: base - delta (delta>0 lowers it → easier to spawn)
+      const effectiveThreshold = baseThreshold - thresholdDelta;
+
+      // Step 3: gate — band must reach effective threshold
+      if (band < effectiveThreshold) continue;
+
+      // Step 4: no overlap with major dots
+      let tooClose = false;
+      for (const md of majorDots) {
+        if (Math.hypot(pos.x - md.x, pos.y - md.y) < md.rad * 1.2) { tooClose = true; break; }
+      }
+      if (tooClose) continue;
+
+      // Step 5: density band drives cluster count
+      const densityFrac = band / (steps - 1); // 0.33, 0.66, 1.0 for steps=4
+      const count = Math.max(1, Math.round(densityFrac * clusterSize));
+
+      for (let j = 0; j < count; j++) {
+        const angle = hash(SEED ^ i*997  ^ j*991  ^ type.charCodeAt(0))       * Math.PI * 2;
+        const dist  = hash(SEED ^ i*983  ^ j*977  ^ type.charCodeAt(0)*7)     * clusterSize * 1.5;
+        minorDots[type].push({ x: pos.x + Math.cos(angle)*dist, y: pos.y + Math.sin(angle)*dist });
+      }
+    }
+  }
+}
+
+// ── heatmap draw ──────────────────────────────────────────────────────────────
+function drawHeatmap(type) {
+  const Wp = cv.width, Hp = cv.height;
+  const img = g.createImageData(Wp, Hp);
+  const d = img.data, col = TYPE_CFG[type].col;
+  const steps = +document.getElementById('sl_ds').value;
+  for (let y = 0; y < Hp; y++) for (let x = 0; x < Wp; x++) {
+    const v    = sampleNoise(noiseMaps[type], x, y);
+    const band = stepNoise(v, steps);
+    const frac = band / (steps - 1);
+    const i = (y*Wp + x)*4;
+    d[i]=col[0]*frac|0; d[i+1]=col[1]*frac|0; d[i+2]=col[2]*frac|0; d[i+3]=220;
+  }
+  g.putImageData(img, 0, 0);
+}
+
+// ── draw scene ────────────────────────────────────────────────────────────────
+function drawScene() {
+  const A = TRI_A, B = TRI_B, C = TRI_C;
+  const Wp = cv.width, Hp = cv.height;
+  g.clearRect(0,0,Wp,Hp);
+  g.fillStyle = '#0a0c10'; g.fillRect(0,0,Wp,Hp);
+
+  // Clip everything to triangle
+  g.save();
+  g.beginPath(); g.moveTo(A.x,A.y); g.lineTo(B.x,B.y); g.lineTo(C.x,C.y); g.closePath(); g.clip();
+
+  if (activeDMap !== 'OFF') {
+    // ── Density map mode ──
+    drawHeatmap(activeDMap);
+    const type = activeDMap;
+    const isMinor = ['GRASS','GRAVEL','FERN','FLOWER'].includes(type);
+    g.fillStyle = TYPE_CFG[type].dotCol + 'ff';
+    const r = TYPE_CFG[type].r;
+    if (isMinor) {
+      for (const p of minorDots[type]) { g.beginPath(); g.arc(p.x,p.y,r,0,Math.PI*2); g.fill(); }
+    } else {
+      for (const md of majorDots) {
+        if (md.type !== type) continue;
+        g.beginPath(); g.arc(md.x,md.y,r,0,Math.PI*2); g.fill();
+      }
+    }
+  } else {
+    // ── Foliage mode ──
+
+    // Ground fill
+    g.beginPath(); g.moveTo(A.x,A.y); g.lineTo(B.x,B.y); g.lineTo(C.x,C.y); g.closePath();
+    g.fillStyle = '#12180e'; g.fill();
+
+    // Debug: base grid triangles
+    if (document.getElementById('tg_base').checked) {
+      g.strokeStyle = 'rgba(100,140,255,0.18)'; g.lineWidth = 0.5;
+      for (const t of baseLeaves) {
+        g.beginPath(); g.moveTo(t.a.x,t.a.y); g.lineTo(t.b.x,t.b.y); g.lineTo(t.c.x,t.c.y); g.closePath(); g.stroke();
+      }
+    }
+    // Debug: major LOD triangles
+    if (document.getElementById('tg_lod').checked) {
+      g.strokeStyle = 'rgba(255,200,80,0.22)'; g.lineWidth = 0.5;
+      for (const t of lodLeaves) {
+        g.beginPath(); g.moveTo(t.a.x,t.a.y); g.lineTo(t.b.x,t.b.y); g.lineTo(t.c.x,t.c.y); g.closePath(); g.stroke();
+      }
+    }
+
+    // Minor foliage — drawn before major so major sits on top
+    const minorTypes  = ['GRASS','GRAVEL','FERN','FLOWER'];
+    const minorToggle = ['tg_grs','tg_grv','tg_frn','tg_flw'];
+    minorTypes.forEach((type, idx) => {
+      if (!document.getElementById(minorToggle[idx]).checked) return;
+      g.fillStyle = TYPE_CFG[type].dotCol + 'cc';
+      const r = TYPE_CFG[type].r;
+      for (const p of minorDots[type]) { g.beginPath(); g.arc(p.x,p.y,r,0,Math.PI*2); g.fill(); }
+    });
+
+    // Major foliage (trees / boulders) on top
+    for (const md of majorDots) {
+      if (!md.type) continue;
+      const tgId = md.type === 'TREE' ? 'tg_tree' : 'tg_boul';
+      if (!document.getElementById(tgId).checked) continue;
+      const cfg = TYPE_CFG[md.type];
+      g.beginPath(); g.arc(md.x,md.y,cfg.r,0,Math.PI*2);
+      g.fillStyle = cfg.dotCol; g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 1.2; g.stroke();
+    }
+  }
+
+  g.restore();
+
+  // Triangle outline (always on top, outside clip)
+  g.beginPath(); g.moveTo(A.x,A.y); g.lineTo(B.x,B.y); g.lineTo(C.x,C.y); g.closePath();
+  g.strokeStyle = '#4a6a90'; g.lineWidth = 1.5; g.stroke();
+
+  // Stats
+  document.getElementById('stats').textContent =
+    'Major (tree/boulder) : ' + majorDots.filter(d=>d.type).length + '\n' +
+    'Grass   : ' + minorDots.GRASS.length  + '\n' +
+    'Gravel  : ' + minorDots.GRAVEL.length + '\n' +
+    'Fern    : ' + minorDots.FERN.length   + '\n' +
+    'Flower  : ' + minorDots.FLOWER.length;
+}
+
+// ── rebuild (recomputes everything) ──────────────────────────────────────────
+function rebuild() {
+  const Wp = cv.offsetWidth, Hp = cv.offsetHeight;
+  cv.width = Wp; cv.height = Hp;
+
+  const baseDepth  = +document.getElementById('sl_bd').value;
+  const lodDepth   = +document.getElementById('sl_ld').value;
+  const claimProb  = +document.getElementById('sl_cp').value;
+  const majorScale = +document.getElementById('sl_ms').value;
+  const budget     = +document.getElementById('sl_bu').value;
+  const minorScale = +document.getElementById('sl_ns').value;
+  const clusterSz  = +document.getElementById('sl_cr').value;
+  const steps      = +document.getElementById('sl_ds').value;
+  const favStr     = +document.getElementById('sl_fs').value;
+
+  const cx = Wp*0.5, pad = 30;
+  TRI_A = {x:cx,     y:pad    };
+  TRI_B = {x:Wp-pad, y:Hp-pad };
+  TRI_C = {x:pad,    y:Hp-pad };
+
+  // Build all noise maps — each type has its own seed and cell size (sf)
+  noiseMaps = {};
+  for (const [type, cfg] of Object.entries(TYPE_CFG)) {
+    const isMajor = type === 'TREE' || type === 'BOULDER';
+    const scale   = (isMajor ? majorScale : minorScale) * cfg.sf;
+    noiseMaps[type] = makeNoise(Wp, Hp, scale, (cfg.seed ^ SEED) >>> 0);
+  }
+
+  // Major foliage: subdivision LOD claim tree
+  baseLeaves = makeBaseGrid(TRI_A, TRI_B, TRI_C, baseDepth);
+  _rng = 0; lodLeaves = []; majorDots = [];
+  for (const bl of baseLeaves)
+    claimMajor(bl.a, bl.b, bl.c, 0, lodDepth-1, claimProb);
+
+  // Minor foliage: pure barycentric, no subdivision
+  placeMinor(TRI_A, TRI_B, TRI_C, budget, clusterSz, steps, favStr);
+
+  drawScene();
+}
+
+// ── UI ────────────────────────────────────────────────────────────────────────
+function setDMap(t) {
+  activeDMap = t;
+  document.querySelectorAll('.dm-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('dm_'+t).classList.add('active');
+  rebuild();
+}
+function newSeed() { SEED = Math.random()*0xFFFFFFFF|0; rebuild(); }
+
+// Sliders: update label + rebuild
+[
+  ['sl_bd','vBD',0], ['sl_ld','vLD',0], ['sl_cp','vCP',2], ['sl_ms','vMS',0],
+  ['sl_bu','vBU',0], ['sl_ns','vNS',0], ['sl_cr','vCR',0], ['sl_ds','vDS',0],
+  ['sl_fs','vFS',1]
+].forEach(([sid,vid,dec]) => {
+  const sl = document.getElementById(sid);
+  const vl = document.getElementById(vid);
+  sl.addEventListener('input', () => { vl.textContent = (+sl.value).toFixed(dec); rebuild(); });
+});
+
+// Layer toggles: redraw only (no rebuild needed)
+document.querySelectorAll('.sw input').forEach(cb =>
+  cb.addEventListener('change', drawScene)
+);
+
+window.addEventListener('resize', rebuild);
+rebuild();
+</script>
+</body>
+</html>

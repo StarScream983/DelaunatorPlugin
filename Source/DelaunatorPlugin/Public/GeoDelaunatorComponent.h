@@ -21,6 +21,7 @@
 class FCBTResource_Interface;
 class UMaterialInterface;
 class IPawnInterface;
+class FQueuedThreadPool;
 
 #define _PI UE_DOUBLE_PI
 #define _TAU UE_DOUBLE_TWO_PI
@@ -491,10 +492,10 @@ protected:
 
 	TArray<FVector2D> LonLat;
 	TArray<FVector> FibonacciPoints; // BUFFER FOR TRIANGLES VERTICES
-	float VoronoiSubdivRadiusMultiplier = 1.1f; // scales site chord into the yellow unit sphere
+	float VoronoiSubdivRadiusMultiplier = 0.9f; // scales site chord into the yellow unit sphere
 	TArray<double> VoronoiSubdivRadius; // farther voronoi corner for each site, serves as subdiv distance unit
 	TArray<uint32> VoronoiCellColors; // random colors for Voronoi cells, generated on CPU and sent to GPU for rendering
-	TArray<FVector3_HighLow> FibonacciPoints_HL; // HIGH-LOW BUFFER FOR GPU TRIANGLE VERTICES
+	TArray<FVector3_HighLow> FibonacciPoints_HL; // HIGH-LOW BUFFER FOR DELAUNAY GPU TRIANGLE VERTICES
 	std::vector<double> coords; // FOR DELAUNAYTOR
 	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
 	TArray<int32> SphericalTrisFlat; // TRIANGLES BUFFER
@@ -522,18 +523,19 @@ protected:
 	TArray<FUintVector2> VoronoiGeoMesh_Ranges;
 	TArray<int32> VoronoiGeoMesh_Flat;
 
-
-	// CBT STRUCTURE
+	//==========================================================================================================
+	// CBT SUBDIVISION AND MERGE
+	//==========================================================================================================
 	
 	// Hop count from ClosestSite (1 = immediate Voronoi neighbors).
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "0", UIMin = "0", ClampMax = "5", UIMax = "5"), Category = "GeoDelaunator|Pawn")
 	int32 NeighborRingDepth = 2;
 
-	// Max split count and number of distance bands inside the trigger.
+	// Split count for each tracked site.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1", UIMin = "1", ClampMax = "24", UIMax = "24"), Category = "GeoDelaunator|Pawn")
 	int32 SubdivDepth = 5;
 
-	// TriggerRadius = UnitVoronoiSubdivRadius * this. Split into SubdivDepth equal bands.
+	// TriggerRadius = UnitVoronoiSubdivRadius * this.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = "1.0", UIMin = "1.0"), Category = "GeoDelaunator|Pawn")
 	float SubdivTriggerMultiplier = 6.f;
 
@@ -544,8 +546,8 @@ protected:
 	int32 ClosestSite = INDEX_NONE;
 	int32 LastClosestSite = INDEX_NONE; // previous closest; merge it out when the pawn leaves
 	TArray<int32> TrackedSites; // ClosestSite plus its neighbor ring from the last tick
-	TArray<int32> DebugGreenSites; // joined the ring this entry; drawn green until the flash ends
-	TArray<int32> DebugRedSites; // left the ring this entry; drawn red until the flash ends
+	TArray<int32> DiscoveredSites; // joined the ring this entry; drawn green until the flash ends
+	TArray<int32> AbandonedSites; // left the ring this entry; drawn red until the flash ends
 	float DebugFlashUntil = 0.f;
 
 	uint32 D{ 16 }; // CBT Depth
@@ -556,6 +558,8 @@ protected:
 	TArray<FPointer_CBT> Pointer_Buffer;
 
 	TSharedPtr<FCBTResource_Interface> CBTResources;
+	// Three workers. Split and foliage tasks are queued here.
+	FQueuedThreadPool* CBTThreadPool = nullptr;
 
 	/** Game thread: `SyncPlanetColorDebugToRenderThread`; render thread: `GetPlanetColorDebugShaderValue_RenderThread`. */
 	TAtomic<uint32> PlanetColorDebugShaderValue;
@@ -563,7 +567,7 @@ protected:
 	// Paper §3.3 update, run on the CPU from PawnTick. Pool index, not BisectorID.
 	int32 BisectorSplitDepth(uint64 BisectorID) const; // how many times has this triangle been split
 	int32 RootHalfEdgeFromBisectorID(uint64 BisectorID) const; // which original half-edge did this triangle come from
-	void ResetBisectorUpdateFields();
+	void ResetBisectorUpdateFields(int32 inSite);
 	void GenerateSplitCommands(int32 Begin, int32 EndHe, int32 TargetSubdivDepth);
 	void ReserveSplitBlocks();
 	void FillSplitBlocks(int32 Begin, int32 EndHe);
@@ -572,12 +576,8 @@ protected:
 	void MergeSiteToDepth(int32 SiteIndex, int32 TargetDepth);
 	void SplitSiteToDepth(int32 SiteIndex, int32 TargetDepth);
 	void MergeBisector(int32 PoolIndexJ, int32 RecursionDepth = 0);
-	void RefineBisector(int32 PoolIndex, int32 RecursionDepth, int32 DepthCap, TArray<int32>& Busy, TArray<int32>& Done);
-	void SplitBisector(int32 PoolIndexJ, int32 PoolIndexK);
 	void SplitBisectorFromSnapshot(int32 PoolIndexJ, int32 PoolIndexK, const TArray<int32>& SnapNext, const TArray<int32>& SnapPrev, TArray<uint8>& Written);
-	void RefineBisectorPointers(int32 ParentPool, int32 EvenPool, int32 OddPool);
 	void RefineBisectorPointersFromSnapshot(int32 ParentPool, int32 EvenPool, int32 OddPool, int32 SnapNext, int32 SnapPrev, const TArray<int32>& SnapNextArr, const TArray<int32>& SnapPrevArr, TArray<uint8>& Written);
-	int32 OneToBitID(int32 Index) const; // Algorithm 7: i-th occupied pool slot
 	int32 ZeroToBitID(int32 Index) const; // Algorithm 8: i-th free pool slot
 	int32 AllocateBisectorSlot();
 	void OccupyCbtPoolSlot(int32 PoolIndex);
@@ -586,6 +586,14 @@ protected:
 	bool IsLiveBisector(int32 PoolIndex) const;
 	bool GetBisectorVertices(int32 PoolIndex, int32 RootHeID, FVector& OutV0, FVector& OutV1, FVector& OutV2) const;
 	void DrawBisectorDebug(int32 PoolIndex, int32 RootHeID, float GroundRadius);
+	// void RefineBisector(int32 PoolIndex, int32 RecursionDepth, int32 DepthCap, TArray<int32>& Busy, TArray<int32>& Done);
+	// void SplitBisector(int32 PoolIndexJ, int32 PoolIndexK);
+	// void RefineBisectorPointers(int32 ParentPool, int32 EvenPool, int32 OddPool);
+	// int32 OneToBitID(int32 Index) const; // Algorithm 7: i-th occupied pool slot
+
+	//==========================================================================================================
+	// END CBT SUBDIVISION AND MERGE
+	//==========================================================================================================
 	
 public:
 
