@@ -43,8 +43,12 @@ BEGIN_SHADER_PARAMETER_STRUCT(FMeshWeaverDrawParameters, )
 	SHADER_PARAMETER_SRV(Buffer<float>, DistanceToBoundaryNormPerSite)
 	SHADER_PARAMETER_SRV(Buffer<float>, ErosionControlPerSite)
 	SHADER_PARAMETER_SRV(Buffer<uint>, LandDistanceField)
-	SHADER_PARAMETER(float, PlanetRadius)
+	SHADER_PARAMETER(float, PlanetRadiusHigh)
+	SHADER_PARAMETER(float, PlanetRadiusLow)
+	// Rotation and scale only. The origin is the high/low pair below.
 	SHADER_PARAMETER(FMatrix44f, LocalToWorld)
+	SHADER_PARAMETER(FVector3f, WorldOriginHigh)
+	SHADER_PARAMETER(FVector3f, WorldOriginLow)
 	SHADER_PARAMETER(uint32, Unlit)
 	SHADER_PARAMETER(uint32, ColorViewMode)
 	SHADER_PARAMETER(float, MaxLandDistance)
@@ -113,8 +117,26 @@ void AddMeshWeaverDrawPass(
 	PassParameters->DistanceToBoundaryNormPerSite = CBT->GetDistanceToBoundaryNormPerSiteSRV();
 	PassParameters->ErosionControlPerSite = CBT->GetErosionControlPerSiteSRV();
 	PassParameters->LandDistanceField = CBT->GetLandDistanceFieldSRV();
-	PassParameters->PlanetRadius = Proxy->PlanetRadius;
-	PassParameters->LocalToWorld = FMatrix44f(Proxy->GetLocalToWorld());
+	const double Radius = Proxy->PlanetRadius;
+	const float RadiusHigh = static_cast<float>(Radius);
+	PassParameters->PlanetRadiusHigh = RadiusHigh;
+	PassParameters->PlanetRadiusLow = static_cast<float>(Radius - static_cast<double>(RadiusHigh));
+
+	const FMatrix LocalToWorld = Proxy->GetLocalToWorld();
+	const FVector Origin = LocalToWorld.GetOrigin();
+	const float OriginHighX = static_cast<float>(Origin.X);
+	const float OriginHighY = static_cast<float>(Origin.Y);
+	const float OriginHighZ = static_cast<float>(Origin.Z);
+	PassParameters->WorldOriginHigh = FVector3f(OriginHighX, OriginHighY, OriginHighZ);
+	PassParameters->WorldOriginLow = FVector3f(
+		static_cast<float>(Origin.X - static_cast<double>(OriginHighX)),
+		static_cast<float>(Origin.Y - static_cast<double>(OriginHighY)),
+		static_cast<float>(Origin.Z - static_cast<double>(OriginHighZ)));
+	FMatrix44f LocalToWorldNoOrigin(LocalToWorld);
+	LocalToWorldNoOrigin.M[3][0] = 0.f;
+	LocalToWorldNoOrigin.M[3][1] = 0.f;
+	LocalToWorldNoOrigin.M[3][2] = 0.f;
+	PassParameters->LocalToWorld = LocalToWorldNoOrigin;
 	PassParameters->Unlit = Proxy->GetUnlit();
 	PassParameters->ColorViewMode = Proxy->GetColorViewMode();
 	PassParameters->MaxLandDistance = CBT->GetMaxLandDistance();

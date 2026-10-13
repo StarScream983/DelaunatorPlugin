@@ -95,7 +95,7 @@ FPrimitiveSceneProxy* UGeoDelaunatorComponent::CreateSceneProxy()
 	UE_LOG(LogTemp, Warning, TEXT("GeoDelaunatorComponent::CreateSceneProxy bUseMeshWeaver=%d"), bUseMeshWeaver ? 1 : 0);
 	if (bUseMeshWeaver)
 	{
-		return new FMeshWeaverSceneProxy(this, GetCBTResources(), GetPlanetRadius(), bMeshWeaverUnlit);
+		return new FMeshWeaverSceneProxy(this, GetCBTResources(), PlanetRadius, bMeshWeaverUnlit);
 	}
 	return new FGeoVoronoiIndirectInstancingSceneProxy(this);
 }
@@ -1523,7 +1523,7 @@ void UGeoDelaunatorComponent::DrawBisectorDebug(int32 PoolIndex, int32 RootHeID,
 		return;
 	}
 	const FTransform& Xf = GetComponentTransform();
-	const float DebugRadius = GroundRadius + 0.f;
+	const float DebugRadius = GroundRadius + FMath::Clamp(DebugAboveGround, 0.f, 1000.f);
 	const FVector W0 = Xf.TransformPosition(V0 * DebugRadius);
 	const FVector W1 = Xf.TransformPosition(V1 * DebugRadius);
 	const FVector W2 = Xf.TransformPosition(V2 * DebugRadius);
@@ -1615,6 +1615,7 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		ImGui::SameLine();
 		ImGui::Checkbox("Unit Sphere##Neighbors", &bDrawNeighborSpheres);
 		ImGui::SliderFloat("Debug Bisector Thickness", &DebugBisectorThickness, 0.5f, 1000.f, "%.1f m");
+		ImGui::SliderFloat("Debug Bisector Above Ground", &DebugAboveGround, 0.f, 1000.f, "%.1f m");
 	}
 	ImGui::End();
 #pragma endregion PLANET_GENERAL_DATA_WINDOW
@@ -2390,7 +2391,7 @@ void UGeoDelaunatorComponent::GeoDelaunayFrom()
 	TArray<FVector3_HighLow> Circumcenters_HL; // transiant to build VoronoiGeoCenters_HL
 	Circumcenters_HL.Empty();
 	Circumcenters_HL.Reserve(SphericalTriangles.Num());
-	Geo_Circumcenters(Circumcenters, Circumcenters_HL);
+	Geo_Centroids(Circumcenters, Circumcenters_HL);
 
 	FGeoPolygonResult tempResult = Geo_Polygons(Circumcenters, Circumcenters_HL);
 	VoronoiGeoMesh = tempResult.Polygons;

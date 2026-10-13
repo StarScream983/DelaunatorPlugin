@@ -551,6 +551,8 @@ protected:
 	bool bDrawNeighborBisectors = false;
 	// Magenta bisector lines in PawnTick. Meters, matching DrawDebugLine thickness.
 	float DebugBisectorThickness = 0.5f;
+	// Radial lift of those lines above the site ground radius. Meters, 0–1000.
+	float DebugAboveGround = 0.f;
 
 	int32 ClosestSite = INDEX_NONE;
 	int32 LastClosestSite = INDEX_NONE; // previous closest; merge it out when the pawn leaves

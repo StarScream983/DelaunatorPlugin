@@ -1186,11 +1186,54 @@ After that, the explorer capsule hits the elevated Delaunay shell. The GPU Voron
 
 ---
 
-## Gravity volume overlap (2026-10-01)
+Yes. The weaver shifts each vertex into camera-relative space with one float add, then projects with the translated clip matrix.
 
-- **Purpose:** when an actor implementing `IPawnInterface` enters `APlanetPrototype::GravityVolume`, register it on `UGeoDelaunatorComponent` as `Pawn`; unregister on leave.
-- **Key files:**
-  - `Source/DelaunatorPlugin/Public/Explorer/PawnInterface.h`
-  - `Source/DelaunatorPlugin/Public/PlanetPrototype.h` / `Private/PlanetPrototype.cpp`
-  - `Source/DelaunatorPlugin/Public/GeoDelaunatorComponent.h` — `Pawn`, `RegisterPawn`, `UnregisterPawn`
-- **Status:** working (basic). `PawnTick` finds the closest site, yellow 1× / orange 5× spheres (`UnitVoronoiSubdivRadius = VoronoiSubdivRadius × VoronoiSubdivRadiusMultiplier`, default 1.2). Inside orange, CPU runs the paper §3.3 passes (reset, command, reserve, fill) until that site's bisectors reach the 1×-band depth (1 at the orange edge, 5 inside yellow). `BisectorID` is `2^{ceil(log2 H)} + h` so Algorithm 2 recovers the root half-edge. Gravity force not implemented yet. Merge not implemented yet.
+```145:150:Plugins/DelaunatorPlugin/Shaders/Private/MeshWeaverDraw.usf
+	float3 WorldPos = mul(float4(LocalPos, 1.0f), LocalToWorld).xyz;
+	float3 WorldNrm = normalize(mul(LocalNrm, (float3x3)LocalToWorld));
+	float3 TranslatedWorldPos = WorldPos + View.RelativePreViewTranslation;
+
+	FVSOut O;
+	O.ClipPos = mul(float4(TranslatedWorldPos, 1.0f), View.TranslatedWorldToClip);
+```
+
+`LocalPos` is the unit vertex times `PlanetRadius`, so `WorldPos` is an absolute position. `View.RelativePreViewTranslation` is Unreal's float offset that moves absolute positions onto the camera. `TranslatedWorldToClip` then treats that result as camera-relative.
+
+Both values in that add are floats, and `LocalToWorld` was already packed into a `FMatrix44f` before upload. At 1000 km the absolute position and the camera offset are each about 100,000,000 cm, where a float step is about 8 cm, so the add does not land on the real camera-relative point. The indirect path does this shift with `ResolvedView.PreViewTranslation` and the large-world add, and only then converts to float.
+
+The stored `High`/`Low` pairs are already the split. The weaver merges them too early, with a float add, and then does the camera shift in float too. Keep the pair through the scale, and do the camera shift with the large-world add.
+
+In `MainVS`, stop calling `ReconstructPosition` before the radius multiply. Build an `FDFVector3` from the three `High`/`Low` pairs and scale it with `DFMul` by the radius. `PlanetRadius` has to be a double-float pair as well, because `GetPlanetRadius()` casts it to float before the shader ever sees it. The rotation stays a normal `float3x3`. The translation does not: it is added with `DFAdd`.
+
+The camera shift is the indirect path's operation, not `RelativePreViewTranslation`:
+
+```hlsl
+float3 TranslatedWorldPos = LWCToFloat(LWCAdd(LWCPromote(WorldDF), ResolvedView.PreViewTranslation));
+```
+
+`DFFastToFloat` is only valid after that add, once the value is camera-relative. `TranslatedWorldToClip` stays as it is. Normals stay on the unit vectors.
+
+The indirect shader does not actually do this for the vertex. It float-adds `High + Low`, multiplies by a float radius, and only the camera offset uses `PreViewTranslation`. That camera add is the part to copy. The radius multiply has to stay on the split pair, or the low half is already gone before the add.
+
+The weaver now keeps the high/low split through the radius scale, then shifts into camera space with the large-world add. UE 5.3 has no `FDF` types, so this is that split using `fma` plus the LWC tile.
+
+`MeshWeaverDraw.usf` scales the unit direction with `ScaleDF64` before any float add. The radius is uploaded as a high/low pair from the double, not from `GetPlanetRadius()`. The actor origin is a second high/low pair. The camera shift is `MakeLWCVector3(-View.ViewTilePosition, View.RelativePreViewTranslation)`, then `LWCToFloat`, then `TranslatedWorldToClip`.
+
+Recompile the shader and set the radius to 1000 km again. The surface should stay put while you are outside it.
+
+The positions never leave 32-bit. `FVector3_DF64` is two `float3`s, a high half and a low half. The only `double` is inside `TwoProduct`, and it dies on the same line:
+
+```136:141:Plugins/DelaunatorPlugin/Shaders/Private/MeshWeaverDraw.usf
+void TwoProduct(float A, float B, out float Hi, out float Lo)
+{
+	Hi = A * B;
+	// This shader's fma is the double intrinsic. The float product's error fits in that mantissa.
+	Lo = (float)fma((double)A, (double)B, -(double)Hi);
+}
+```
+
+`Hi` is the ordinary float product. The double `fma` exists only to recover the bits that product rounded away, and `(float)` stores those bits back into `Lo`. After that, scale, rotate, and the large-world tile math all stay on the float pair. The interpolators are `float4` clip position and `float3` normal and color.
+
+Desktop GPUs do have 64-bit float. On a consumer card it runs at a small fraction of 32-bit rate, often 1/32 or 1/64, which is why the rest of the shader stays in the high/low float pair. This uses one double fused multiply-add per axis, per vertex, then throws the double away.
+
+That cast is there because this shader’s `fma` only matched a double overload, which is what failed the compile. The float intrinsic is `mad`. I can switch `TwoProduct` to `mad` so the shader has no 64-bit ops at all.

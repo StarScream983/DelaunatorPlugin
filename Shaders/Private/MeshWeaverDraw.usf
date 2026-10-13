@@ -2,6 +2,7 @@
 
 #include "/Engine/Private/Common.ush"
 #include "/Engine/Private/DeferredShadingCommon.ush"
+#include "/Engine/Private/LargeWorldCoordinates.ush"
 #include "MeshWeaverCommon.ush"
 
 StructuredBuffer<QuadRenderInstance> InstanceBuffer;
@@ -13,8 +14,11 @@ Buffer<float> DistanceToBoundaryNormPerSite;
 Buffer<float> ErosionControlPerSite;
 Buffer<uint> LandDistanceField;
 
-float PlanetRadius;
+float PlanetRadiusHigh;
+float PlanetRadiusLow;
 float4x4 LocalToWorld;
+float3 WorldOriginHigh;
+float3 WorldOriginLow;
 uint Unlit;
 uint ColorViewMode;
 float MaxLandDistance;
@@ -123,28 +127,124 @@ struct FVSOut
 	float3 BaseColor : TEXCOORD1;
 };
 
+struct FVector3_DF64
+{
+	float3 High;
+	float3 Low;
+};
+
+void TwoProduct(float A, float B, out float Hi, out float Lo)
+{
+	Hi = A * B;
+	// This shader's fma is the double intrinsic. The float product's error fits in that mantissa.
+	Lo = (float)fma((double)A, (double)B, -(double)Hi);
+}
+
+void FastTwoSum(float A, float B, out float Hi, out float Lo)
+{
+	Hi = A + B;
+	Lo = B - (Hi - A);
+}
+
+// Unit direction times radius, keeping the low half. A float multiply drops it.
+FVector3_DF64 ScaleDF64(FVector3_DF64 V, float Scale)
+{
+	FVector3_DF64 Result;
+	[unroll]
+	for (int Axis = 0; Axis < 3; ++Axis)
+	{
+		float ProductHigh;
+		float ProductLow;
+		TwoProduct(V.High[Axis], Scale, ProductHigh, ProductLow);
+		ProductLow += V.Low[Axis] * Scale;
+		FastTwoSum(ProductHigh, ProductLow, Result.High[Axis], Result.Low[Axis]);
+	}
+	return Result;
+}
+
+FVector3_DF64 ReconstructPositionDF64(FVector3_HighLow V)
+{
+	FVector3_DF64 Result;
+	Result.High = float3(V.X.High, V.Y.High, V.Z.High);
+	Result.Low = float3(V.X.Low, V.Y.Low, V.Z.Low);
+	return Result;
+}
+
+// High becomes the LWC tile. Low stays in the offset, which is what survives the camera shift.
+FLWCVector3 MakeLWCVectorFromDF64(float3 High, float3 Low)
+{
+	const float TileSize = UE_LWC_RENDER_TILE_SIZE;
+	const float InvTileSize = UE_LWC_RENDER_TILE_SIZE_RCP;
+	float3 Tile = floor(High * InvTileSize);
+	float3 Offset = (High - Tile * TileSize) + Low;
+	return MakeLWCVector3(Tile, Offset);
+}
+
+FVector3_DF64 RotateDF64(FVector3_DF64 V, float3x3 Rotation)
+{
+	float3 RotatedHigh = mul(V.High, Rotation);
+	float3 RotatedLow = mul(V.Low, Rotation);
+	FVector3_DF64 Result;
+	FastTwoSum(RotatedHigh.x, RotatedLow.x, Result.High.x, Result.Low.x);
+	FastTwoSum(RotatedHigh.y, RotatedLow.y, Result.High.y, Result.Low.y);
+	FastTwoSum(RotatedHigh.z, RotatedLow.z, Result.High.z, Result.Low.z);
+	return Result;
+}
+
 FVSOut MainVS(FVSIn In)
 {
 	QuadRenderInstance Inst = InstanceBuffer[In.InstanceId];
-	float3 V0 = ReconstructPosition(VoronoiGeoCenters[Inst.GeoCenterA]);
-	float3 V1 = ReconstructPosition(VoronoiGeoCenters[Inst.GeoCenterB]);
-	float3 V2 = ReconstructPosition(CBT_FibonacciPoints[Inst.SiteId]);
+	FVector3_DF64 V0 = ReconstructPositionDF64(VoronoiGeoCenters[Inst.GeoCenterA]);
+	FVector3_DF64 V1 = ReconstructPositionDF64(VoronoiGeoCenters[Inst.GeoCenterB]);
+	FVector3_DF64 V2 = ReconstructPositionDF64(CBT_FibonacciPoints[Inst.SiteId]);
 
-	float3 VertexPos = (In.VertexId == 0) ? V0 : ((In.VertexId == 1) ? V1 : V2);
+	FVector3_DF64 VertexDF = V2;
+	if (In.VertexId == 0)
+	{
+		VertexDF = V0;
+	}
+	else if (In.VertexId == 1)
+	{
+		VertexDF = V1;
+	}
 
 	float Elev = ElevationPerSite[Inst.SiteId];
 	const float ElevationScale = 0.03f;
-	float3 LocalPos = VertexPos * (PlanetRadius * (1.0f + Elev * ElevationScale));
+	const float RadiusScale = 1.0f + Elev * ElevationScale;
+	FVector3_DF64 LocalDF = ScaleDF64(VertexDF, PlanetRadiusHigh * RadiusScale);
+	float3 RadiusLowOffset = VertexDF.High * (PlanetRadiusLow * RadiusScale);
+	float SumHigh;
+	float SumLow;
+	FastTwoSum(LocalDF.High.x, LocalDF.Low.x + RadiusLowOffset.x, SumHigh, SumLow);
+	LocalDF.High.x = SumHigh;
+	LocalDF.Low.x = SumLow;
+	FastTwoSum(LocalDF.High.y, LocalDF.Low.y + RadiusLowOffset.y, SumHigh, SumLow);
+	LocalDF.High.y = SumHigh;
+	LocalDF.Low.y = SumLow;
+	FastTwoSum(LocalDF.High.z, LocalDF.Low.z + RadiusLowOffset.z, SumHigh, SumLow);
+	LocalDF.High.z = SumHigh;
+	LocalDF.Low.z = SumLow;
 
-	float3 LocalNrm = normalize(cross(V1 - V0, V2 - V0));
+	float3 V0f = V0.High + V0.Low;
+	float3 V1f = V1.High + V1.Low;
+	float3 V2f = V2.High + V2.Low;
+	float3 VertexPos = (In.VertexId == 0) ? V0f : ((In.VertexId == 1) ? V1f : V2f);
+
+	float3 LocalNrm = normalize(cross(V1f - V0f, V2f - V0f));
 	if (dot(LocalNrm, VertexPos) < 0.0f)
 	{
 		LocalNrm = -LocalNrm;
 	}
 
-	float3 WorldPos = mul(float4(LocalPos, 1.0f), LocalToWorld).xyz;
+	FVector3_DF64 RotatedDF = RotateDF64(LocalDF, (float3x3)LocalToWorld);
+	FLWCVector3 WorldLWC = LWCAdd(
+		MakeLWCVectorFromDF64(RotatedDF.High, RotatedDF.Low),
+		MakeLWCVectorFromDF64(WorldOriginHigh, WorldOriginLow));
+	// Same pair InstancedStereo builds: tile is -ViewTilePosition, offset is RelativePreViewTranslation.
+	FLWCVector3 PreViewTranslation = MakeLWCVector3(-View.ViewTilePosition, View.RelativePreViewTranslation);
+	float3 TranslatedWorldPos = LWCToFloat(LWCAdd(WorldLWC, PreViewTranslation));
+
 	float3 WorldNrm = normalize(mul(LocalNrm, (float3x3)LocalToWorld));
-	float3 TranslatedWorldPos = WorldPos + View.RelativePreViewTranslation;
 
 	FVSOut O;
 	O.ClipPos = mul(float4(TranslatedWorldPos, 1.0f), View.TranslatedWorldToClip);

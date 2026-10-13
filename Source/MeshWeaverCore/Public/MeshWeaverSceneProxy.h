@@ -21,7 +21,7 @@ public:
 	FMeshWeaverSceneProxy(
 		UPrimitiveComponent* InComponent,
 		const TSharedPtr<FCBTResource_Interface>& InCBTResources,
-		float InPlanetRadius,
+		double InPlanetRadius,
 		bool bInUnlit = true);
 
 	virtual ~FMeshWeaverSceneProxy() = default;
@@ -42,7 +42,8 @@ protected:
 	//~ End FPrimitiveSceneProxy Interface
 
 public:
-	float PlanetRadius = 1.0f;
+	// Centimeters. Kept as double so the draw pass can split it into high/low.
+	double PlanetRadius = 1.0;
 	TSharedPtr<FCBTResource_Interface> CBTResources;
 
 	const FMeshWeaverDrawBuffers* GetCulledDrawBuffers() const { return CulledDrawBuffers; }

@@ -15,7 +15,7 @@ const static FName NAME_MeshWeaver(TEXT("MeshWeaver"));
 FMeshWeaverSceneProxy::FMeshWeaverSceneProxy(
 	UPrimitiveComponent* InComponent,
 	const TSharedPtr<FCBTResource_Interface>& InCBTResources,
-	float InPlanetRadius,
+	double InPlanetRadius,
 	bool bInUnlit)
 	: FPrimitiveSceneProxy(InComponent, NAME_MeshWeaver)
 	, PlanetRadius(InPlanetRadius)
