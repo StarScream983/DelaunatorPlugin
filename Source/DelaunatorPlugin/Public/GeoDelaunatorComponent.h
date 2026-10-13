@@ -549,6 +549,8 @@ protected:
 	bool bDrawClosestBisectors = false;
 	bool bDrawNeighborSpheres = false;
 	bool bDrawNeighborBisectors = false;
+	// For finding depth-8 neighbors. White sphere on the closest depth-8 leaf. Green is the same root fan, yellow is the previous or next root of the same cell.
+	bool bDrawClosestDepth8 = false;
 	// Magenta bisector lines in PawnTick. Meters, matching DrawDebugLine thickness.
 	float DebugBisectorThickness = 0.5f;
 	// Radial lift of those lines above the site ground radius. Meters, 0–1000.

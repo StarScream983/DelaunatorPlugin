@@ -293,6 +293,134 @@ void UGeoDelaunatorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 //==========================================================================================================
 // BEGIN CBT SUBDIVISION AND MERGE
 //==========================================================================================================
+//==========================================================================================================
+// DEPTH-8 NEIGHBORS
+// Names the depth-8 triangle across one edge of a depth-8 bisector, for finding depth-8 neighbors.
+// FanDelta -1 is the previous root in the same cell, 0 is the same root fan, +1 is the next root.
+// A false result means that edge is the Voronoi border, so the neighbor is the other cell and is not returned.
+// Edge 0 is V0-V1, edge 1 is V0-V2, edge 2 is V1-V2. Bits are oldest split first.
+//==========================================================================================================
+struct FDepth8EdgeNeighbor // for finding depth-8 neighbors: which fan, and that triangle's 8 split bits
+{
+	int32 FanDelta = 0; // for finding depth-8 neighbors: -1 previous root, 0 same root, +1 next root
+	uint8 Bits[8] = {}; // for finding depth-8 neighbors: split bits of the neighbor triangle, oldest first
+};
+
+static bool DescendKeepEdge(FDepth8EdgeNeighbor& Neighbor, int32& Length, int32 Edge, int32& OutEdge) // for finding depth-8 neighbors: child that inherits a whole side edge
+{
+	if (Length >= 8) // for finding depth-8 neighbors: depth-8 bits are already full
+	{
+		return false;
+	}
+	// A side edge is inherited whole by one child, and it becomes that child's base. For finding depth-8 neighbors.
+	if (Edge == 1) // for finding depth-8 neighbors: left edge is kept by the bit-0 child
+	{
+		Neighbor.Bits[Length++] = 0; // for finding depth-8 neighbors: append the bit-0 child
+		OutEdge = 0; // for finding depth-8 neighbors: that whole edge is now the child's base
+		return true;
+	}
+	if (Edge == 2) // for finding depth-8 neighbors: right edge is kept by the bit-1 child
+	{
+		Neighbor.Bits[Length++] = 1; // for finding depth-8 neighbors: append the bit-1 child
+		OutEdge = 0; // for finding depth-8 neighbors: that whole edge is now the child's base
+		return true;
+	}
+	return false;
+}
+
+static bool DescendHalfEdge(FDepth8EdgeNeighbor& Neighbor, int32& Length, int32 Edge, bool bV0Side, int32& OutEdge) // for finding depth-8 neighbors: child that owns one half of the base
+{
+	if (Edge != 0 || Length >= 8) // for finding depth-8 neighbors: only the base is split in half
+	{
+		return false;
+	}
+	// The V0 half of the base lands on the neighbor's bit-1 child. For finding depth-8 neighbors.
+	if (bV0Side) // for finding depth-8 neighbors: half toward V0
+	{
+		Neighbor.Bits[Length++] = 1; // for finding depth-8 neighbors: bit-1 child owns that half
+		OutEdge = 2; // for finding depth-8 neighbors: the half is that child's right edge
+	}
+	else // for finding depth-8 neighbors: half toward V1
+	{
+		Neighbor.Bits[Length++] = 0; // for finding depth-8 neighbors: bit-0 child owns that half
+		OutEdge = 1; // for finding depth-8 neighbors: the half is that child's left edge
+	}
+	return true;
+}
+
+static bool EdgeNeighborAt(const uint8* Bits, int32 Length, int32 Edge, FDepth8EdgeNeighbor& Out, int32& OutLength, int32& OutEdge) // for finding depth-8 neighbors: walk one edge up the splits
+{
+	if (Length == 0) // for finding depth-8 neighbors: reached the root bisector
+	{
+		if (Edge == 0) // for finding depth-8 neighbors: root base is the Voronoi border, other cell
+		{
+			return false;
+		}
+		Out.FanDelta = (Edge == 1) ? -1 : 1; // for finding depth-8 neighbors: left goes to the previous root, right to the next
+		OutLength = 0; // for finding depth-8 neighbors: no split bits yet on the root
+		OutEdge = (Edge == 1) ? 2 : 1; // for finding depth-8 neighbors: this root's left is the previous root's right, and the reverse
+		return true;
+	}
+	const int32 Bit = Bits[Length - 1]; // for finding depth-8 neighbors: newest split bit of this triangle
+	FDepth8EdgeNeighbor Parent; // for finding depth-8 neighbors: the triangle before this split
+	int32 ParentLength = 0; // for finding depth-8 neighbors: how many bits the parent answer has
+	int32 ParentEdge = 0; // for finding depth-8 neighbors: which edge of the parent the answer sits on
+	if (Bit == 0) // for finding depth-8 neighbors: this triangle is the bit-0 child
+	{
+		if (Edge == 2) // for finding depth-8 neighbors: right edge of a bit-0 child is the sibling
+		{
+			Out.FanDelta = 0; // for finding depth-8 neighbors: sibling stays in the same root fan
+			for (int32 i = 0; i < Length - 1; ++i) // for finding depth-8 neighbors: copy the parent bits
+			{
+				Out.Bits[i] = Bits[i];
+			}
+			Out.Bits[Length - 1] = 1; // for finding depth-8 neighbors: sibling is the bit-1 child
+			OutLength = Length; // for finding depth-8 neighbors: sibling is the same depth
+			OutEdge = 1; // for finding depth-8 neighbors: shared edge is the sibling's left
+			return true;
+		}
+		const int32 ParentQuery = (Edge == 0) ? 1 : 0; // for finding depth-8 neighbors: base came from the parent's left, the other edge from the parent's base
+		if (!EdgeNeighborAt(Bits, Length - 1, ParentQuery, Parent, ParentLength, ParentEdge)) // for finding depth-8 neighbors: ask the parent for that edge
+		{
+			return false;
+		}
+		Out = Parent; // for finding depth-8 neighbors: start from the parent's neighbor
+		OutLength = ParentLength; // for finding depth-8 neighbors: parent answer is one bit short
+		if (Edge == 0) // for finding depth-8 neighbors: whole side edge, one child keeps it
+		{
+			return DescendKeepEdge(Out, OutLength, ParentEdge, OutEdge); // for finding depth-8 neighbors: pass the child's edge back up
+		}
+		return DescendHalfEdge(Out, OutLength, ParentEdge, true, OutEdge); // for finding depth-8 neighbors: V0 half of the parent's base
+	}
+	if (Edge == 1) // for finding depth-8 neighbors: left edge of a bit-1 child is the sibling
+	{
+		Out.FanDelta = 0; // for finding depth-8 neighbors: sibling stays in the same root fan
+		for (int32 i = 0; i < Length - 1; ++i) // for finding depth-8 neighbors: copy the parent bits
+		{
+			Out.Bits[i] = Bits[i];
+		}
+		Out.Bits[Length - 1] = 0; // for finding depth-8 neighbors: sibling is the bit-0 child
+		OutLength = Length; // for finding depth-8 neighbors: sibling is the same depth
+		OutEdge = 2; // for finding depth-8 neighbors: shared edge is the sibling's right
+		return true;
+	}
+	const int32 ParentQuery = (Edge == 0) ? 2 : 0; // for finding depth-8 neighbors: base came from the parent's right, the other edge from the parent's base
+	if (!EdgeNeighborAt(Bits, Length - 1, ParentQuery, Parent, ParentLength, ParentEdge)) // for finding depth-8 neighbors: ask the parent for that edge
+	{
+		return false;
+	}
+	Out = Parent; // for finding depth-8 neighbors: start from the parent's neighbor
+	OutLength = ParentLength; // for finding depth-8 neighbors: parent answer is one bit short
+	if (Edge == 0) // for finding depth-8 neighbors: whole side edge, one child keeps it
+	{
+		return DescendKeepEdge(Out, OutLength, ParentEdge, OutEdge); // for finding depth-8 neighbors: pass the child's edge back up
+	}
+	return DescendHalfEdge(Out, OutLength, ParentEdge, false, OutEdge); // for finding depth-8 neighbors: V1 half of the parent's base
+}
+//==========================================================================================================
+// END DEPTH-8 NEIGHBORS
+//==========================================================================================================
+
 void UGeoDelaunatorComponent::PawnTick()
 {
 	if (!Pawn || FibonacciPoints.Num() == 0)
@@ -477,6 +605,169 @@ void UGeoDelaunatorComponent::PawnTick()
 				DrawBisectorDebug(PoolIndex, RootHe, SiteGround);
 			}
 		}
+
+		// Depth-8 leaves of every split cell. One white sphere on the centroid nearest the pawn.
+		if (bDrawClosestDepth8)
+		{
+			constexpr int32 LeafDepth = 8;
+			const FTransform& Xf = GetComponentTransform();
+			double BestDistSq = TNumericLimits<double>::Max();
+			int32 BestPool = INDEX_NONE;
+			int32 BestRootHe = INDEX_NONE; // for finding depth-8 neighbors: root fan of the closest depth-8 triangle
+			FVector BestCentroidWorld = FVector::ZeroVector;
+			float BestSphereRadius = 0.f;
+			float BestDebugRadius = 0.f; // for finding depth-8 neighbors: radius used to place neighbor spheres
+			for (const int32 Site : NewTracked)
+			{
+				if (!SitePrefixSums.IsValidIndex(Site) || !VoronoiHalfEdges_Map.IsValidIndex(Site))
+				{
+					continue;
+				}
+				const int32 BeginHe = SitePrefixSums[Site];
+				const int32 EndHe = BeginHe + VoronoiHalfEdges_Map[Site].Num() - 1;
+				TArray<int32> Slots;
+				CollectSiteRootBisectors(BeginHe, EndHe, Slots);
+				const float SiteElev = ElevationPerSite.IsValidIndex(Site) ? ElevationPerSite[Site] : 0.0f;
+				const float SiteGround = (float)PlanetRadius * (1.0f + SiteElev * ElevationScale);
+				const float DebugRadius = SiteGround + FMath::Clamp(DebugAboveGround, 0.f, 1000.f);
+				for (const int32 PoolIndex : Slots)
+				{
+					if (!IsLiveBisector(PoolIndex))
+					{
+						continue;
+					}
+					if (BisectorSplitDepth(RootBisectors_Buffer[PoolIndex].BisectorID) != LeafDepth)
+					{
+						continue;
+					}
+					const int32 RootHe = RootHalfEdgeFromBisectorID(RootBisectors_Buffer[PoolIndex].BisectorID);
+					FVector V0, V1, V2;
+					if (!GetBisectorVertices(PoolIndex, RootHe, V0, V1, V2))
+					{
+						continue;
+					}
+					const FVector CentroidDir = (V0 + V1 + V2).GetSafeNormal();
+					const FVector CentroidWorld = Xf.TransformPosition(CentroidDir * DebugRadius);
+					const double DistSq = FVector::DistSquared(PawnWorldPosition, CentroidWorld);
+					if (DistSq < BestDistSq)
+					{
+						BestDistSq = DistSq;
+						BestPool = PoolIndex;
+						BestRootHe = RootHe; // for finding depth-8 neighbors: remember which root fan this leaf came from
+						BestCentroidWorld = CentroidWorld;
+						BestDebugRadius = DebugRadius; // for finding depth-8 neighbors: same lift as the closest sphere
+						// Chord of one side, so the sphere stays inside this leaf.
+						BestSphereRadius = FVector::Dist(CentroidDir, V0) * DebugRadius * 0.35f;
+					}
+				}
+			}
+			if (BestPool != INDEX_NONE)
+			{
+				DrawDebugSphere(GetWorld(), BestCentroidWorld, BestSphereRadius, 10, FColor::White, false, 0.15f);
+
+				//==========================================================================================================
+				// DEPTH-8 NEIGHBORS
+				// From the closest depth-8 bisector, name the depth-8 triangle across each of its three edges.
+				// Same root fan, or the previous and next root of the same cell. The other Voronoi cell is not drawn.
+				//==========================================================================================================
+				// Oldest bit first. The newest split is the low bit of BisectorID. For finding depth-8 neighbors.
+				uint8 Bits[LeafDepth]; // for finding depth-8 neighbors: 8 split bits of the closest triangle
+				uint64 BitCursor = RootBisectors_Buffer[BestPool].BisectorID; // for finding depth-8 neighbors: id that holds those bits
+				for (int32 i = 0; i < LeafDepth; ++i) // for finding depth-8 neighbors: peel the newest bit first
+				{
+					Bits[LeafDepth - 1 - i] = (uint8)(BitCursor & 1ull); // for finding depth-8 neighbors: store oldest bit at index 0
+					BitCursor >>= 1; // for finding depth-8 neighbors: move to the next older split bit
+				}
+				int32 SameRootNeighbors = 0; // for finding depth-8 neighbors: count inside the same root fan
+				int32 AdjacentRootNeighbors = 0; // for finding depth-8 neighbors: count in the previous and next root
+				if (HalfEdge_Buffer.IsValidIndex(BestRootHe)) // for finding depth-8 neighbors: root ring still has prev and next
+				{
+					for (int32 Edge = 0; Edge < 3; ++Edge) // for finding depth-8 neighbors: one pass per edge of this triangle
+					{
+						FDepth8EdgeNeighbor Neighbor; // for finding depth-8 neighbors: fan and bits of the triangle across this edge
+						int32 NeighborLength = 0; // for finding depth-8 neighbors: must come back as 8
+						int32 NeighborEdge = 0; // for finding depth-8 neighbors: which edge of the neighbor is the shared one
+						if (!EdgeNeighborAt(Bits, LeafDepth, Edge, Neighbor, NeighborLength, NeighborEdge) || NeighborLength != LeafDepth) // for finding depth-8 neighbors: border edge has no neighbor here
+						{
+							continue;
+						}
+						int32 NeighborRoot = BestRootHe; // for finding depth-8 neighbors: same root until the fan says otherwise
+						if (Neighbor.FanDelta < 0) // for finding depth-8 neighbors: previous root of this cell
+						{
+							NeighborRoot = HalfEdge_Buffer[BestRootHe].Prev; // for finding depth-8 neighbors: root half-edge before this one
+						}
+						else if (Neighbor.FanDelta > 0) // for finding depth-8 neighbors: next root of this cell
+						{
+							NeighborRoot = HalfEdge_Buffer[BestRootHe].Next; // for finding depth-8 neighbors: root half-edge after this one
+						}
+						if (!HalfEdge_Buffer.IsValidIndex(NeighborRoot)) // for finding depth-8 neighbors: skip a missing root
+						{
+							continue;
+						}
+						uint64 Packed = 0; // for finding depth-8 neighbors: neighbor split bits packed oldest at the top
+						for (int32 i = 0; i < LeafDepth; ++i) // for finding depth-8 neighbors: fold the 8 bits into one mask
+						{
+							Packed = (Packed << 1) | (uint64)Neighbor.Bits[i]; // for finding depth-8 neighbors: next oldest bit
+						}
+						const uint64 NeighborID = (((uint64)1 << D) + (uint64)NeighborRoot) << LeafDepth | Packed; // for finding depth-8 neighbors: full bisector id of that leaf
+						// The id is known. The pool slot is whichever entry of this root still holds that id. For finding depth-8 neighbors.
+						int32 NeighborPool = INDEX_NONE; // for finding depth-8 neighbors: pool slot of that id
+						if (IsLiveBisector(NeighborRoot) && RootBisectors_Buffer[NeighborRoot].BisectorID == NeighborID) // for finding depth-8 neighbors: all-even leaf stays in the root slot
+						{
+							NeighborPool = NeighborRoot; // for finding depth-8 neighbors: use the root slot
+						}
+						else if (OddsByRootHe.IsValidIndex(NeighborRoot)) // for finding depth-8 neighbors: other leaves are in this root's odd list
+						{
+							for (const int32 PoolIndex : OddsByRootHe[NeighborRoot]) // for finding depth-8 neighbors: find the slot with this id
+							{
+								if (IsLiveBisector(PoolIndex) && RootBisectors_Buffer[PoolIndex].BisectorID == NeighborID) // for finding depth-8 neighbors: id match, not a distance test
+								{
+									NeighborPool = PoolIndex; // for finding depth-8 neighbors: this slot is the neighbor triangle
+									break;
+								}
+							}
+						}
+						if (NeighborPool == INDEX_NONE) // for finding depth-8 neighbors: that leaf is not allocated
+						{
+							continue;
+						}
+						FVector V0, V1, V2; // for finding depth-8 neighbors: corners of the neighbor triangle
+						if (!GetBisectorVertices(NeighborPool, NeighborRoot, V0, V1, V2)) // for finding depth-8 neighbors: decode the neighbor so it can be drawn
+						{
+							continue;
+						}
+						const FVector CentroidDir = (V0 + V1 + V2).GetSafeNormal(); // for finding depth-8 neighbors: neighbor centroid on the unit sphere
+						const FVector CentroidWorld = Xf.TransformPosition(CentroidDir * BestDebugRadius); // for finding depth-8 neighbors: neighbor centroid in world
+						const float SphereRadius = FVector::Dist(CentroidDir, V0) * BestDebugRadius * 0.35f; // for finding depth-8 neighbors: sphere sized to the neighbor triangle
+						const bool bSameRoot = Neighbor.FanDelta == 0; // for finding depth-8 neighbors: green is the same fan, yellow is the adjacent root
+						DrawDebugSphere(GetWorld(), CentroidWorld, SphereRadius, 10, bSameRoot ? FColor::Green : FColor::Yellow, false, 0.15f); // for finding depth-8 neighbors: draw that neighbor
+						if (bSameRoot) // for finding depth-8 neighbors: tally the same-fan neighbor
+						{
+							++SameRootNeighbors;
+						}
+						else // for finding depth-8 neighbors: tally the previous or next root
+						{
+							++AdjacentRootNeighbors;
+						}
+					}
+				}
+				if (GEngine)
+				{
+					GEngine->AddOnScreenDebugMessage(2, 0.15f, FColor::White,
+						FString::Printf(TEXT("Closest depth-8  pool %d  pawnToCentroid %.1f  same-root %d  cell-roots %d"),
+							BestPool, FMath::Sqrt(BestDistSq), SameRootNeighbors, AdjacentRootNeighbors)); // for finding depth-8 neighbors: show both neighbor counts
+				}
+				//==========================================================================================================
+				// END DEPTH-8 NEIGHBORS
+				//==========================================================================================================
+			}
+			else if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(2, 0.15f, FColor::White,
+					TEXT("Closest depth-8  none (subdiv depth is not 8)"));
+			}
+		}
+
 		LastClosestSite = ClosestSite;
 		TrackedSites = MoveTemp(NewTracked);
 	}
@@ -1606,6 +1897,8 @@ void UGeoDelaunatorComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		ImGui::Separator();
 		ImGui::Text("Closest Site");
 		ImGui::Checkbox("Bisectors##Closest", &bDrawClosestBisectors);
+		ImGui::SameLine();
+		ImGui::Checkbox("Depth 8##Closest", &bDrawClosestDepth8);
 		ImGui::SameLine();
 		ImGui::Checkbox("Unit Sphere##Closest", &bDrawClosestUnitSphere);
 		ImGui::SameLine();
