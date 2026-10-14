@@ -13,6 +13,18 @@ canvas { width:100%; height:100%; display:block; }
 label { display:flex; justify-content:space-between; color:#888; margin-bottom:2px; }
 label b { color:#6af; }
 input[type=range] { width:100%; accent-color:#6af; }
+.bands { position:relative; height:18px; margin-top:4px; touch-action:none; }
+.bands .track { position:absolute; left:0; right:0; top:7px; height:4px; background:#2a3040; border-radius:2px; }
+.bands .knob { position:absolute; top:2px; width:14px; height:14px; transform:translateX(-50%); border-radius:50%; background:#6af; cursor:pointer; }
+select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; padding:6px 8px; border-radius:5px; font-family:monospace; font-size:12px; }
+#baseTri { color:#9ec4e4; font-size:13px; margin-top:4px; }
+.toggle-row { display:flex; align-items:center; justify-content:space-between; padding:3px 0; color:#778; font-size:11px; }
+.sw { position:relative; width:36px; height:18px; flex-shrink:0; margin:0; display:block; }
+.sw input { opacity:0; width:0; height:0; }
+.sw-t { position:absolute; inset:0; background:#1a1e26; border-radius:18px; cursor:pointer; border:1px solid #2a3040; }
+.sw-t:before { content:''; position:absolute; width:12px; height:12px; left:2px; top:2px; background:#3a4050; border-radius:50%; transition:.15s; }
+.sw input:checked + .sw-t { background:#1a3050; }
+.sw input:checked + .sw-t:before { transform:translateX(18px); background:#6af; }
 </style>
 </head>
 <body>
@@ -22,16 +34,410 @@ input[type=range] { width:100%; accent-color:#6af; }
     <input id="slCols" type="range" min="1" max="10" value="3" step="1"></div>
   <div><label>Rows <b id="vRows">2</b></label>
     <input id="slRows" type="range" min="1" max="10" value="2" step="1"></div>
+  <div><label>Jitter <b id="vJitter">18</b></label>
+    <input id="slJitter" type="range" min="0" max="18" value="18" step="1"></div>
+  <div id="baseTri">Base Tri: NONE</div>
   <div class="sec">Major foliage</div>
+  <div><label>Base Subdivs <b id="vBase">2</b></label>
+    <input id="slBase" type="range" min="0" max="4" value="2" step="1"></div>
+  <div><label>LOD Depth <b id="vLod">2</b></label>
+    <input id="slLod" type="range" min="0" max="4" value="2" step="1"></div>
+  <select id="noiseView">
+    <option value="none">NONE</option>
+    <option value="subdiv">Subdiv</option>
+    <option value="trees">Trees</option>
+    <option value="boulders">Boulders</option>
+  </select>
+  <div class="sec">Subdiv noise</div>
+  <div><label>Subdiv Noise Size <b id="vSubNoise">140</b></label>
+    <input id="slSubNoise" type="range" min="40" max="400" value="140" step="10"></div>
+  <div><label>Offset X <b id="vSubOffX">0</b></label>
+    <input id="slSubOffX" type="range" min="-400" max="400" value="0" step="10"></div>
+  <div><label>Offset Y <b id="vSubOffY">0</b></label>
+    <input id="slSubOffY" type="range" min="-400" max="400" value="0" step="10"></div>
+  <div class="sec">Trees</div>
+  <div><label>Density steps <b id="vTreeSteps">4</b></label>
+    <input id="slTreeSteps" type="range" min="2" max="8" value="4" step="1">
+    <div id="treeBands" class="bands"></div></div>
+  <div><label>Noise size <b id="vTreeNoise">140</b></label>
+    <input id="slTreeNoise" type="range" min="40" max="400" value="140" step="10"></div>
+  <div><label>Offset X <b id="vTreeOffX">0</b></label>
+    <input id="slTreeOffX" type="range" min="-400" max="400" value="0" step="10"></div>
+  <div><label>Offset Y <b id="vTreeOffY">0</b></label>
+    <input id="slTreeOffY" type="range" min="-400" max="400" value="0" step="10"></div>
+  <div class="sec">Boulders</div>
+  <div><label>Density steps <b id="vBoulSteps">4</b></label>
+    <input id="slBoulSteps" type="range" min="2" max="8" value="4" step="1">
+    <div id="boulBands" class="bands"></div></div>
+  <div><label>Noise size <b id="vBoulNoise">140</b></label>
+    <input id="slBoulNoise" type="range" min="40" max="400" value="140" step="10"></div>
+  <div><label>Offset X <b id="vBoulOffX">0</b></label>
+    <input id="slBoulOffX" type="range" min="-400" max="400" value="0" step="10"></div>
+  <div><label>Offset Y <b id="vBoulOffY">0</b></label>
+    <input id="slBoulOffY" type="range" min="-400" max="400" value="0" step="10"></div>
+  <div class="sec">Layers (draw only)</div>
+  <div class="toggle-row">Base Subdiv Tris <label class="sw"><input type="checkbox" id="tgBase" checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Major LOD Tris <label class="sw"><input type="checkbox" id="tgLod" checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">All Majors <label class="sw"><input type="checkbox" id="tgAll" checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Trees <label class="sw"><input type="checkbox" id="tgTrees" checked><span class="sw-t"></span></label></div>
+  <div class="toggle-row">Boulders <label class="sw"><input type="checkbox" id="tgBoul" checked><span class="sw-t"></span></label></div>
 </aside>
 <div id="cvwrap"><canvas id="cv"></canvas></div>
 <script>
 const cv = document.getElementById('cv');
 const g = cv.getContext('2d');
 let tris = [];
+let hover = null;
+let noiseMaps = {};
+let stars = new Map();
+const bandEdges = { trees: [], boulders: [] };
+const BAND_HOST = { trees: 'treeBands', boulders: 'boulBands' };
+const corner = [[1, 2], [2, 0], [0, 1]];
+const NOISE_SEED = 0xABCD1234;
+const NOISE_KIND = {
+  subdiv:   { seed: 0x51BD5101, col: [120, 170, 210], steps: 'slLod',       size: 'slSubNoise',  ox: 'slSubOffX',  oy: 'slSubOffY' },
+  trees:    { seed: 0xA1B2C3D4, col: [58, 154, 80],   steps: 'slTreeSteps', size: 'slTreeNoise', ox: 'slTreeOffX', oy: 'slTreeOffY' },
+  boulders: { seed: 0x11223344, col: [138, 96, 48],  steps: 'slBoulSteps', size: 'slBoulNoise', ox: 'slBoulOffX', oy: 'slBoulOffY' }
+};
 
-function makeTri(v) {
-  return { v: v, child: null };
+function makeTri(v, id, depth) {
+  return {
+    v, id, depth, child: null, major: null,
+    n: [null, null, null], ne: [0, 1, 2], flip: [false, false, false],
+    t0: [0, 0, 0], t1: [1, 1, 1], pier: [null, null, null]
+  };
+}
+
+function near(a, b) { return Math.hypot(a.x - b.x, a.y - b.y) < 0.01; }
+function edgePts(t, e) { return [t.v[(e + 1) % 3], t.v[(e + 2) % 3]]; }
+
+function edgeDirFlip(t, e, nb, ne) {
+  const [a, b] = edgePts(t, e);
+  const [c, d] = edgePts(nb, ne);
+  return near(a, d) && near(b, c);
+}
+
+function pointAt(t, e, nb, ne, t0, t1, flip) {
+  t.n[e] = nb;
+  t.ne[e] = ne;
+  t.flip[e] = flip;
+  t.t0[e] = t0;
+  t.t1[e] = t1;
+}
+
+function linkBoth(a, ea, b, eb) {
+  const flip = edgeDirFlip(a, ea, b, eb);
+  pointAt(a, ea, b, eb, 0, 1, flip);
+  pointAt(b, eb, a, ea, 0, 1, flip);
+}
+
+function findEdge(t, p, q) {
+  for (let e = 0; e < 3; e++) {
+    const [a, b] = edgePts(t, e);
+    if ((near(a, p) && near(b, q)) || (near(a, q) && near(b, p))) return e;
+  }
+  return -1;
+}
+
+function bindShared(a, b) {
+  for (let e = 0; e < 3; e++) {
+    const [p, q] = edgePts(a, e);
+    const e2 = findEdge(b, p, q);
+    if (e2 >= 0) { linkBoth(a, e, b, e2); return; }
+  }
+}
+
+function mid(a, b) { return { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }; }
+
+function split(t) {
+  if (t.child) return;
+  const [a, b, c] = t.v;
+  const mab = mid(a, b), mbc = mid(b, c), mca = mid(c, a);
+  const c0 = makeTri([a, mab, mca], t.id, t.depth + 1);
+  const c1 = makeTri([b, mbc, mab], t.id, t.depth + 1);
+  const c2 = makeTri([c, mca, mbc], t.id, t.depth + 1);
+  const c3 = makeTri([mab, mbc, mca], t.id, t.depth + 1);
+  t.child = [c0, c1, c2, c3];
+  const pierOn = (edge) => {
+    const N = t.n[edge];
+    if (!N) return null;
+    return { nb: N, ne: t.ne[edge], t: (t.t0[edge] + t.t1[edge]) * 0.5 };
+  };
+  const pAB = pierOn(2), pBC = pierOn(0), pCA = pierOn(1);
+  c0.pier = [t.pier[0], pAB, pCA];
+  c1.pier = [t.pier[1], pBC, pAB];
+  c2.pier = [t.pier[2], pCA, pBC];
+  c3.pier = [pAB, pBC, pCA];
+  linkBoth(c0, 0, c3, 1);
+  linkBoth(c1, 0, c3, 2);
+  linkBoth(c2, 0, c3, 0);
+  attachOuter(t, 0, c1, 2, 0);
+  attachOuter(t, 0, c2, 1, 1);
+  attachOuter(t, 1, c2, 2, 0);
+  attachOuter(t, 1, c0, 1, 1);
+  attachOuter(t, 2, c0, 2, 0);
+  attachOuter(t, 2, c1, 1, 1);
+}
+
+function attachOuter(parent, pe, child, ce, half) {
+  const N = parent.n[pe];
+  if (!N) return;
+  const flip = parent.flip[pe];
+  const p0 = parent.t0[pe], p1 = parent.t1[pe];
+  const midT = (p0 + p1) * 0.5;
+  const a0 = !flip ? (half === 0 ? p0 : midT) : (half === 0 ? midT : p0);
+  const a1 = !flip ? (half === 0 ? midT : p1) : (half === 0 ? p1 : midT);
+  pointAt(child, ce, N, parent.ne[pe], a0, a1, flip);
+}
+
+function leaves(t, out) {
+  if (!t.child) { out.push(t); return; }
+  for (const c of t.child) leaves(c, out);
+}
+
+function allLeaves() {
+  const out = [];
+  for (const t of tris) leaves(t, out);
+  return out;
+}
+
+function nodesAt(depth) {
+  const out = [];
+  const walk = (t) => {
+    if (t.depth === depth) { out.push(t); return; }
+    if (t.child) for (const c of t.child) walk(c);
+  };
+  for (const t of tris) walk(t);
+  return out;
+}
+
+function uniformLevels(n) {
+  for (let i = 0; i < n; i++) {
+    const layer = allLeaves();
+    for (const t of layer) split(t);
+  }
+}
+
+function hash(n) {
+  n = (n ^ 61) ^ (n >>> 16); n += n << 3; n ^= n >>> 4;
+  n = Math.imul(n, 0x27d4eb2d); n ^= n >>> 15;
+  return (n >>> 0) / 4294967296;
+}
+function makeNoise(W, H, cellSz, seed) {
+  const cols = Math.ceil(W / cellSz) + 2;
+  const rows = Math.ceil(H / cellSz) + 2;
+  const grid = new Float32Array(cols * rows);
+  for (let i = 0; i < grid.length; i++) grid[i] = Math.pow(hash(seed + i * 1000003 + seed * 997), 2.2);
+  return { grid, cols, rows, cellSz };
+}
+function wrapCell(i, n) { return ((i % n) + n) % n; }
+function sampleNoise(ng, x, y) {
+  const gx = x / ng.cellSz, gy = y / ng.cellSz;
+  const ix = Math.floor(gx), iy = Math.floor(gy);
+  const fx = gx - ix, fy = gy - iy, c = ng.cols, r = ng.rows;
+  const x0 = wrapCell(ix, c), x1 = wrapCell(ix + 1, c);
+  const y0 = wrapCell(iy, r), y1 = wrapCell(iy + 1, r);
+  const v00 = ng.grid[y0 * c + x0], v10 = ng.grid[y0 * c + x1];
+  const v01 = ng.grid[y1 * c + x0], v11 = ng.grid[y1 * c + x1];
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  return v00 * (1 - ux) * (1 - uy) + v10 * ux * (1 - uy) + v01 * (1 - ux) * uy + v11 * ux * uy;
+}
+function stepNoise(v, steps, edges) {
+  if (edges && edges.length === steps - 1) {
+    let band = 0;
+    for (const edge of edges) if (v >= edge) band++;
+    return Math.min(steps - 1, band);
+  }
+  return Math.min(steps - 1, Math.floor(v * steps));
+}
+
+function equalEdges(steps) {
+  const edges = [];
+  for (let i = 1; i < steps; i++) edges.push(i / steps);
+  return edges;
+}
+
+function paintKnobs(key) {
+  const host = document.getElementById(BAND_HOST[key]);
+  host.innerHTML = '<div class="track"></div>';
+  bandEdges[key].forEach((edge, i) => {
+    const knob = document.createElement('div');
+    knob.className = 'knob';
+    knob.style.left = (edge * 100) + '%';
+    knob.addEventListener('pointerdown', (ev) => dragKnob(ev, key, i, knob));
+    host.appendChild(knob);
+  });
+}
+
+function syncEdges(key) {
+  const steps = +document.getElementById(NOISE_KIND[key].steps).value;
+  if (bandEdges[key].length === steps - 1) return;
+  bandEdges[key] = equalEdges(steps);
+  paintKnobs(key);
+}
+
+function dragKnob(ev, key, i, knob) {
+  ev.preventDefault();
+  knob.setPointerCapture(ev.pointerId);
+  const host = knob.parentElement;
+  const move = (e) => {
+    const r = host.getBoundingClientRect();
+    const edges = bandEdges[key];
+    const lo = i === 0 ? 0.02 : edges[i - 1] + 0.02;
+    const hi = i === edges.length - 1 ? 0.98 : edges[i + 1] - 0.02;
+    const x = Math.min(hi, Math.max(lo, (e.clientX - r.left) / r.width));
+    edges[i] = x;
+    knob.style.left = (x * 100) + '%';
+    spawnMajors(+document.getElementById('slBase').value);
+    draw();
+  };
+  const up = () => {
+    knob.removeEventListener('pointermove', move);
+    knob.removeEventListener('pointerup', up);
+  };
+  knob.addEventListener('pointermove', move);
+  knob.addEventListener('pointerup', up);
+}
+function centroid(t) {
+  return { x: (t.v[0].x + t.v[1].x + t.v[2].x) / 3, y: (t.v[0].y + t.v[1].y + t.v[2].y) / 3 };
+}
+
+function lodSplit(t, depth, maxD) {
+  if (depth >= maxD) return;
+  const c = centroid(t);
+  const ox = +document.getElementById('slSubOffX').value;
+  const oy = +document.getElementById('slSubOffY').value;
+  const raw = sampleNoise(noiseMaps.subdiv, c.x + ox, c.y + oy);
+  if (maxD === 1) {
+    if (raw < 0.5) return;
+    split(t);
+    return;
+  }
+  const band = stepNoise(raw, maxD);
+  const target = Math.round((band / (maxD - 1)) * maxD);
+  if (depth >= target) return;
+  split(t);
+  for (const ch of t.child) lodSplit(ch, depth + 1, maxD);
+}
+
+function vkey(p) {
+  return Math.round(p.x * 100) + ',' + Math.round(p.y * 100);
+}
+
+function buildStars() {
+  stars = new Map();
+  for (const t of allLeaves()) {
+    for (const p of t.v) {
+      const k = vkey(p);
+      let list = stars.get(k);
+      if (!list) { list = []; stars.set(k, list); }
+      list.push(t);
+    }
+  }
+}
+
+function descend(nb, e2, t0, t1, out) {
+  if (!nb) return;
+  if (!nb.child) { out.push(nb); return; }
+  const lo = t0 < 0.5 - 1e-9 || Math.abs(t0 - 0.5) < 1e-6;
+  const hi = t1 > 0.5 + 1e-9 || Math.abs(t1 - 0.5) < 1e-6;
+  if (lo) descend(nb.child[corner[e2][0]], 2, t0 * 2, Math.min(t1, 0.5) * 2, out);
+  if (hi) descend(nb.child[corner[e2][1]], 1, Math.max(t0, 0.5) * 2 - 1, t1 * 2 - 1, out);
+}
+
+function leavesAcross(tri, e) {
+  const nb = tri.n[e];
+  if (!nb) return [];
+  const out = [];
+  descend(nb, tri.ne[e], tri.t0[e], tri.t1[e], out);
+  return out;
+}
+
+function edgeLength(a, b) {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function onSegment(p, a, b) {
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const len = Math.hypot(abx, aby);
+  if (len < 1e-6) return false;
+  const ux = abx / len, uy = aby / len;
+  if (Math.abs((p.x - a.x) * uy - (p.y - a.y) * ux) > 0.75) return false;
+  const t = (p.x - a.x) * ux + (p.y - a.y) * uy;
+  return t >= -0.5 && t <= len + 0.5;
+}
+
+function pointsOnEdge(tri, e) {
+  const [a, b] = edgePts(tri, e);
+  const out = [];
+  const seen = new Set();
+  const seenPt = new Set();
+  const queue = [a, b];
+  while (queue.length) {
+    const origin = queue.pop();
+    const pk = vkey(origin);
+    if (seenPt.has(pk)) continue;
+    seenPt.add(pk);
+    const list = stars.get(pk) || [];
+    for (const n of list) {
+      if (n !== tri && !seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+      for (const p of n.v) {
+        if (!onSegment(p, a, b)) continue;
+        if (!seenPt.has(vkey(p))) queue.push(p);
+      }
+    }
+  }
+  return out;
+}
+
+function shorterPieces(tri, e) {
+  const [a, b] = edgePts(tri, e);
+  const hoveredLen = edgeLength(a, b);
+  const across = leavesAcross(tri, e);
+  const shorter = [];
+  for (const n of across) {
+    for (let f = 0; f < 3; f++) {
+      const [c, d] = edgePts(n, f);
+      if (!onSegment(c, a, b) || !onSegment(d, a, b)) continue;
+      if (edgeLength(c, d) + 0.5 < hoveredLen) {
+        shorter.push(n);
+        break;
+      }
+    }
+  }
+  return shorter.length ? shorter : across;
+}
+
+function neighborsOf(tri) {
+  const seen = new Set();
+  const out = [];
+  const add = (n) => { if (n && n !== tri && !seen.has(n)) { seen.add(n); out.push(n); } };
+  for (const p of tri.v) {
+    const list = stars.get(vkey(p));
+    if (!list) continue;
+    for (const n of list) add(n);
+  }
+  for (let e = 0; e < 3; e++) {
+    for (const n of shorterPieces(tri, e)) add(n);
+    for (const n of pointsOnEdge(tri, e)) add(n);
+  }
+  for (const pier of tri.pier) {
+    if (!pier) continue;
+    const hit = [];
+    descend(pier.nb, pier.ne, pier.t, pier.t, hit);
+    for (const n of hit) add(n);
+  }
+  return out;
+}
+
+function hash01(n) {
+  n = Math.imul(n ^ (n >>> 16), 0x7feb352d);
+  n = Math.imul(n ^ (n >>> 15), 0x846ca68b);
+  n = (n ^ (n >>> 16)) >>> 0;
+  return n / 4294967295;
 }
 
 function build() {
@@ -39,26 +445,87 @@ function build() {
   const margin = 24;
   const cols = +document.getElementById('slCols').value;
   const rows = +document.getElementById('slRows').value;
+  const jitter = +document.getElementById('slJitter').value;
   const cell = Math.min((W - margin * 2) / cols, (H - margin * 2) / rows);
   const x0 = (W - cols * cell) * 0.5;
   const y0 = (H - rows * cell) * 0.5;
+  const pad = 4;
   const verts = [];
   for (let r = 0; r <= rows; r++) {
     const row = [];
-    for (let c = 0; c <= cols; c++) row.push({ x: x0 + c * cell, y: y0 + r * cell });
+    for (let c = 0; c <= cols; c++) {
+      const i = r * (cols + 1) + c;
+      const jx = (hash01(i * 2 + 1) * 2 - 1) * jitter;
+      const jy = (hash01(i * 2 + 2) * 2 - 1) * jitter;
+      row.push({
+        x: Math.min(W - pad, Math.max(pad, x0 + c * cell + jx)),
+        y: Math.min(H - pad, Math.max(pad, y0 + r * cell + jy))
+      });
+    }
     verts.push(row);
   }
   tris = [];
+  const quads = [];
+  let id = 0;
   for (let r = 0; r < rows; r++) {
+    quads[r] = [];
     for (let c = 0; c < cols; c++) {
       const tl = verts[r][c];
       const tr = verts[r][c + 1];
       const br = verts[r + 1][c + 1];
       const bl = verts[r + 1][c];
-      tris.push(makeTri([tl, br, bl]));
-      tris.push(makeTri([tl, tr, br]));
+      const lower = makeTri([tl, br, bl], id++, 0);
+      const upper = makeTri([tl, tr, br], id++, 0);
+      quads[r][c] = [lower, upper];
+      tris.push(lower, upper);
     }
   }
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const lower = quads[r][c][0];
+      const upper = quads[r][c][1];
+      bindShared(lower, upper);
+      if (c + 1 < cols) bindShared(upper, quads[r][c + 1][0]);
+      if (r + 1 < rows) bindShared(lower, quads[r + 1][c][1]);
+    }
+  }
+  const baseDepth = +document.getElementById('slBase').value;
+  const lodDepth = +document.getElementById('slLod').value;
+  syncEdges('trees');
+  syncEdges('boulders');
+  uniformLevels(baseDepth);
+  buildNoise();
+  if (lodDepth > 0) {
+    for (const t of allLeaves()) lodSplit(t, 0, lodDepth);
+  }
+  buildStars();
+  spawnMajors(baseDepth);
+  hover = null;
+  document.getElementById('baseTri').textContent = 'Base Tri: NONE';
+}
+
+function contains(t, p) {
+  const [a, b, c] = t.v;
+  const v0x = c.x - a.x, v0y = c.y - a.y;
+  const v1x = b.x - a.x, v1y = b.y - a.y;
+  const v2x = p.x - a.x, v2y = p.y - a.y;
+  const d00 = v0x * v0x + v0y * v0y;
+  const d01 = v0x * v1x + v0y * v1y;
+  const d11 = v1x * v1x + v1y * v1y;
+  const d02 = v0x * v2x + v0y * v2y;
+  const d12 = v1x * v2x + v1y * v2y;
+  const inv = 1 / (d00 * d11 - d01 * d01);
+  const u = (d11 * d02 - d01 * d12) * inv;
+  const v = (d00 * d12 - d01 * d02) * inv;
+  return u >= -0.001 && v >= -0.001 && (1 - u - v) >= -0.001;
+}
+
+function hit(p) {
+  const leaves = allLeaves();
+  for (let i = leaves.length - 1; i >= 0; i--) {
+    if (contains(leaves[i], p)) return leaves[i];
+  }
+  return null;
 }
 
 function poly(t) {
@@ -69,18 +536,124 @@ function poly(t) {
   g.closePath();
 }
 
+function noiseSample(key, x, y) {
+  const cfg = NOISE_KIND[key];
+  const steps = +document.getElementById(cfg.steps).value;
+  const ox = +document.getElementById(cfg.ox).value;
+  const oy = +document.getElementById(cfg.oy).value;
+  const raw = sampleNoise(noiseMaps[key], x + ox, y + oy);
+  return { raw, band: stepNoise(raw, steps, bandEdges[key]) };
+}
+
+function majorPoint(t, n) {
+  const c = centroid(t);
+  const jitter = +document.getElementById('slJitter').value;
+  let jx = (hash01(n * 2 + 1) * 2 - 1) * jitter;
+  let jy = (hash01(n * 2 + 2) * 2 - 1) * jitter;
+  let p = { x: c.x + jx, y: c.y + jy };
+  while (!contains(t, p) && (Math.abs(jx) > 0.25 || Math.abs(jy) > 0.25)) {
+    jx *= 0.5;
+    jy *= 0.5;
+    p = { x: c.x + jx, y: c.y + jy };
+  }
+  return contains(t, p) ? p : c;
+}
+
+function spawnMajors(baseDepth) {
+  let n = 1;
+  for (const t of allLeaves()) {
+    t.major = null;
+    if (t.depth <= baseDepth) continue;
+    const p = majorPoint(t, n++);
+    const tree = noiseSample('trees', p.x, p.y);
+    const boul = noiseSample('boulders', p.x, p.y);
+    if (tree.band === 0 && boul.band === 0) continue;
+    t.major = { x: p.x, y: p.y, kind: tree.raw >= boul.raw ? 'trees' : 'boulders' };
+  }
+}
+
+function buildNoise() {
+  const W = cv.width, H = cv.height;
+  noiseMaps = {};
+  for (const [key, cfg] of Object.entries(NOISE_KIND)) {
+    noiseMaps[key] = makeNoise(W, H, +document.getElementById(cfg.size).value, (cfg.seed ^ NOISE_SEED) >>> 0);
+  }
+}
+
+function drawHeatmap(key) {
+  const cfg = NOISE_KIND[key];
+  const ng = noiseMaps[key];
+  const steps = +document.getElementById(cfg.steps).value;
+  const ox = +document.getElementById(cfg.ox).value;
+  const oy = +document.getElementById(cfg.oy).value;
+  const W = cv.width, H = cv.height;
+  const img = g.createImageData(W, H);
+  const d = img.data;
+  const col = cfg.col;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const raw = sampleNoise(ng, x + ox, y + oy);
+      const frac = steps < 2 ? raw : stepNoise(raw, steps, bandEdges[key]) / (steps - 1);
+      const i = (y * W + x) * 4;
+      d[i] = col[0] * frac | 0;
+      d[i + 1] = col[1] * frac | 0;
+      d[i + 2] = col[2] * frac | 0;
+      d[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+}
+
 function draw() {
   const W = cv.width, H = cv.height;
+  const view = document.getElementById('noiseView').value;
+  const ns = hover ? neighborsOf(hover) : [];
+  const nset = new Set(ns);
   g.clearRect(0, 0, W, H);
-  g.fillStyle = '#0a0c10';
-  g.fillRect(0, 0, W, H);
-  for (const t of tris) {
+  if (view === 'none') {
+    g.fillStyle = '#0a0c10';
+    g.fillRect(0, 0, W, H);
+  } else {
+    drawHeatmap(view);
+  }
+  const showBase = document.getElementById('tgBase').checked;
+  const showLod = document.getElementById('tgLod').checked;
+  const baseDepth = +document.getElementById('slBase').value;
+  const shown = [];
+  // Original grid (screen 1) stays on. Base Subdiv Tris only adds the uniform split (screen 2).
+  for (const t of tris) shown.push(t);
+  if (showBase && baseDepth > 0) for (const t of nodesAt(baseDepth)) shown.push(t);
+  if (showLod) for (const t of allLeaves()) if (t.depth > baseDepth) shown.push(t);
+  const shownSet = new Set(shown);
+  for (const t of shown) {
     poly(t);
-    g.fillStyle = '#12180e';
-    g.fill();
+    if (t === hover) g.fillStyle = '#16324a';
+    else if (nset.has(t)) g.fillStyle = '#3a2614';
+    else if (view === 'none') g.fillStyle = '#12180e';
+    else g.fillStyle = 'rgba(0,0,0,0)';
+    if (t === hover || nset.has(t) || view === 'none') g.fill();
     g.lineWidth = 1;
-    g.strokeStyle = '#314356';
+    g.strokeStyle = view === 'none' ? '#314356' : '#c5d4e4';
     g.stroke();
+  }
+  if (hover) {
+    for (const t of ns) {
+      if (!shownSet.has(t)) continue;
+      poly(t); g.lineWidth = 2.5; g.strokeStyle = '#e09040'; g.stroke();
+    }
+    if (shownSet.has(hover)) { poly(hover); g.lineWidth = 2.5; g.strokeStyle = '#6af'; g.stroke(); }
+  }
+  const showAll = document.getElementById('tgAll').checked;
+  const showTrees = document.getElementById('tgTrees').checked;
+  const showBoul = document.getElementById('tgBoul').checked;
+  for (const t of allLeaves()) {
+    if (!t.major || !showAll) continue;
+    if (t.major.kind === 'trees' && !showTrees) continue;
+    if (t.major.kind === 'boulders' && !showBoul) continue;
+    g.beginPath();
+    g.arc(t.major.x, t.major.y, 4, 0, Math.PI * 2);
+    g.fillStyle = t.major.kind === 'trees' ? '#3a9a50' : '#c47a3a';
+    g.fill();
   }
 }
 
@@ -92,10 +665,34 @@ function resize() {
   draw();
 }
 
-[['slCols', 'vCols'], ['slRows', 'vRows']].forEach(([sid, vid]) => {
+[
+  ['slCols', 'vCols'], ['slRows', 'vRows'], ['slJitter', 'vJitter'],
+  ['slBase', 'vBase'], ['slLod', 'vLod'],
+  ['slSubNoise', 'vSubNoise'], ['slSubOffX', 'vSubOffX'], ['slSubOffY', 'vSubOffY'],
+  ['slTreeSteps', 'vTreeSteps'], ['slTreeNoise', 'vTreeNoise'], ['slTreeOffX', 'vTreeOffX'], ['slTreeOffY', 'vTreeOffY'],
+  ['slBoulSteps', 'vBoulSteps'], ['slBoulNoise', 'vBoulNoise'], ['slBoulOffX', 'vBoulOffX'], ['slBoulOffY', 'vBoulOffY']
+].forEach(([sid, vid]) => {
   const sl = document.getElementById(sid);
   const vl = document.getElementById(vid);
   sl.addEventListener('input', () => { vl.textContent = sl.value; resize(); });
+});
+document.getElementById('noiseView').addEventListener('change', draw);
+['tgBase', 'tgLod', 'tgAll', 'tgTrees', 'tgBoul'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', draw);
+});
+cv.addEventListener('mousemove', (ev) => {
+  const r = cv.getBoundingClientRect();
+  const p = { x: (ev.clientX - r.left) * cv.width / r.width, y: (ev.clientY - r.top) * cv.height / r.height };
+  const next = hit(p);
+  if (next === hover) return;
+  hover = next;
+  document.getElementById('baseTri').textContent = 'Base Tri: ' + (hover ? hover.id : 'NONE');
+  draw();
+});
+cv.addEventListener('mouseleave', () => {
+  hover = null;
+  document.getElementById('baseTri').textContent = 'Base Tri: NONE';
+  draw();
 });
 window.addEventListener('resize', resize);
 resize();
