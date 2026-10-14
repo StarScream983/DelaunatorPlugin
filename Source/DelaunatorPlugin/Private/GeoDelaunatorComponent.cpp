@@ -291,9 +291,6 @@ void UGeoDelaunatorComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 }
 
 //==========================================================================================================
-// BEGIN CBT SUBDIVISION AND MERGE
-//==========================================================================================================
-//==========================================================================================================
 // DEPTH-8 NEIGHBORS
 // Names the depth-8 triangle across one edge of a depth-8 bisector, for finding depth-8 neighbors.
 // FanDelta -1 is the previous root in the same cell, 0 is the same root fan, +1 is the next root.
@@ -417,8 +414,47 @@ static bool EdgeNeighborAt(const uint8* Bits, int32 Length, int32 Edge, FDepth8E
 	}
 	return DescendHalfEdge(Out, OutLength, ParentEdge, false, OutEdge); // for finding depth-8 neighbors: V1 half of the parent's base
 }
+
+// Edge 0 joins vertices 0 and 1, edge 1 joins 0 and 2, edge 2 joins 1 and 2. For finding depth-8 vertex neighbors.
+static const int32 Depth8EdgeLo[3] = { 0, 0, 1 }; // for finding depth-8 vertex neighbors: first corner of each edge
+static const int32 Depth8EdgeHi[3] = { 1, 2, 2 }; // for finding depth-8 vertex neighbors: second corner of each edge
+
+static int32 OtherEdgeOnVertex(int32 Vertex, int32 Edge) // for finding depth-8 vertex neighbors: the other edge that leaves this corner
+{
+	if (Vertex == 0) // for finding depth-8 vertex neighbors: corner V0 sits on edges 0 and 1
+	{
+		return Edge == 0 ? 1 : 0;
+	}
+	if (Vertex == 1) // for finding depth-8 vertex neighbors: corner V1 sits on edges 0 and 2
+	{
+		return Edge == 0 ? 2 : 0;
+	}
+	return Edge == 1 ? 2 : 1; // for finding depth-8 vertex neighbors: corner V2 sits on edges 1 and 2
+}
+
+static int32 MapCornerAcrossEdge(int32 Vertex, int32 FromEdge, int32 ToEdge) // for finding depth-8 vertex neighbors: same corner on the triangle across the edge
+{
+	const bool bIsLo = Vertex == Depth8EdgeLo[FromEdge]; // for finding depth-8 vertex neighbors: this corner is the first end of the shared edge
+	// Base-to-base crossings reverse the two ends. Every other crossing keeps them. For finding depth-8 vertex neighbors.
+	const bool bUseLo = (FromEdge == 0 && ToEdge == 0) ? !bIsLo : bIsLo;
+	return bUseLo ? Depth8EdgeLo[ToEdge] : Depth8EdgeHi[ToEdge]; // for finding depth-8 vertex neighbors: that end on the neighbor triangle
+}
+
+static uint64 PackDepth8Bits(const uint8* InBits) // for finding depth-8 vertex neighbors: oldest bit in the high place
+{
+	uint64 Packed = 0;
+	for (int32 i = 0; i < 8; ++i) // for finding depth-8 vertex neighbors: fold the 8 split bits
+	{
+		Packed = (Packed << 1) | (uint64)InBits[i];
+	}
+	return Packed;
+}
 //==========================================================================================================
 // END DEPTH-8 NEIGHBORS
+//==========================================================================================================
+
+//==========================================================================================================
+// BEGIN CBT SUBDIVISION AND MERGE
 //==========================================================================================================
 
 void UGeoDelaunatorComponent::PawnTick()
@@ -680,6 +716,8 @@ void UGeoDelaunatorComponent::PawnTick()
 				}
 				int32 SameRootNeighbors = 0; // for finding depth-8 neighbors: count inside the same root fan
 				int32 AdjacentRootNeighbors = 0; // for finding depth-8 neighbors: count in the previous and next root
+				int32 VertexNeighbors = 0; // for finding depth-8 vertex neighbors: triangles that share a corner but not a whole edge
+				TArray<TPair<int32, uint64>> DrawnDepth8; // for finding depth-8 vertex neighbors: root plus packed bits already drawn
 				if (HalfEdge_Buffer.IsValidIndex(BestRootHe)) // for finding depth-8 neighbors: root ring still has prev and next
 				{
 					for (int32 Edge = 0; Edge < 3; ++Edge) // for finding depth-8 neighbors: one pass per edge of this triangle
@@ -741,6 +779,7 @@ void UGeoDelaunatorComponent::PawnTick()
 						const float SphereRadius = FVector::Dist(CentroidDir, V0) * BestDebugRadius * 0.35f; // for finding depth-8 neighbors: sphere sized to the neighbor triangle
 						const bool bSameRoot = Neighbor.FanDelta == 0; // for finding depth-8 neighbors: green is the same fan, yellow is the adjacent root
 						DrawDebugSphere(GetWorld(), CentroidWorld, SphereRadius, 10, bSameRoot ? FColor::Green : FColor::Yellow, false, 0.15f); // for finding depth-8 neighbors: draw that neighbor
+						DrawnDepth8.Add(TPair<int32, uint64>(NeighborRoot, Packed)); // for finding depth-8 vertex neighbors: this edge neighbor is already drawn
 						if (bSameRoot) // for finding depth-8 neighbors: tally the same-fan neighbor
 						{
 							++SameRootNeighbors;
@@ -750,12 +789,115 @@ void UGeoDelaunatorComponent::PawnTick()
 							++AdjacentRootNeighbors;
 						}
 					}
+
+					//==========================================================================================================
+					// DEPTH-8 VERTEX NEIGHBORS
+					// Walk around each corner of the closest depth-8 triangle. Cyan spheres are the depth-8 triangles
+					// that share that corner and do not share a whole edge. The walk stays in this cell and stops at the Voronoi border.
+					//==========================================================================================================
+					const uint64 StartPacked = PackDepth8Bits(Bits); // for finding depth-8 vertex neighbors: bits of the closest triangle
+					const int32 StartEdges[3][2] = { { 0, 1 }, { 0, 2 }, { 1, 2 } }; // for finding depth-8 vertex neighbors: the two edges on V0, V1, and V2
+					for (int32 Vertex = 0; Vertex < 3; ++Vertex) // for finding depth-8 vertex neighbors: one ring per corner
+					{
+						for (int32 Side = 0; Side < 2; ++Side) // for finding depth-8 vertex neighbors: both directions, so a border does not hide the other side
+						{
+							int32 CurRoot = BestRootHe; // for finding depth-8 vertex neighbors: fan the walk is standing in
+							uint8 CurBits[8]; // for finding depth-8 vertex neighbors: split bits of the triangle the walk is standing on
+							for (int32 i = 0; i < LeafDepth; ++i)
+							{
+								CurBits[i] = Bits[i];
+							}
+							int32 CurVertex = Vertex; // for finding depth-8 vertex neighbors: which corner of the current triangle is the shared one
+							int32 CurEdge = StartEdges[Vertex][Side]; // for finding depth-8 vertex neighbors: edge to cross next
+							for (int32 Step = 0; Step < 32; ++Step) // for finding depth-8 vertex neighbors: a corner ring is much smaller than this cap
+							{
+								FDepth8EdgeNeighbor Neighbor; // for finding depth-8 vertex neighbors: triangle across CurEdge
+								int32 NeighborLength = 0;
+								int32 NeighborEdge = 0;
+								if (!EdgeNeighborAt(CurBits, LeafDepth, CurEdge, Neighbor, NeighborLength, NeighborEdge) || NeighborLength != LeafDepth) // for finding depth-8 vertex neighbors: Voronoi border stops this direction
+								{
+									break;
+								}
+								int32 NextRoot = CurRoot; // for finding depth-8 vertex neighbors: same fan until the edge steps to another root
+								if (Neighbor.FanDelta < 0) // for finding depth-8 vertex neighbors: previous root of the fan we are in
+								{
+									NextRoot = HalfEdge_Buffer.IsValidIndex(CurRoot) ? HalfEdge_Buffer[CurRoot].Prev : INDEX_NONE;
+								}
+								else if (Neighbor.FanDelta > 0) // for finding depth-8 vertex neighbors: next root of the fan we are in
+								{
+									NextRoot = HalfEdge_Buffer.IsValidIndex(CurRoot) ? HalfEdge_Buffer[CurRoot].Next : INDEX_NONE;
+								}
+								if (!HalfEdge_Buffer.IsValidIndex(NextRoot)) // for finding depth-8 vertex neighbors: ring link is missing
+								{
+									break;
+								}
+								const int32 NextVertex = MapCornerAcrossEdge(CurVertex, CurEdge, NeighborEdge); // for finding depth-8 vertex neighbors: same corner on the next triangle
+								const uint64 Packed = PackDepth8Bits(Neighbor.Bits); // for finding depth-8 vertex neighbors: identity of that triangle
+								if (NextRoot == BestRootHe && Packed == StartPacked) // for finding depth-8 vertex neighbors: the ring came back to the closest triangle
+								{
+									break;
+								}
+								bool bAlreadyDrawn = false; // for finding depth-8 vertex neighbors: skip edge neighbors and corners already visited
+								for (const TPair<int32, uint64>& Drawn : DrawnDepth8)
+								{
+									if (Drawn.Key == NextRoot && Drawn.Value == Packed)
+									{
+										bAlreadyDrawn = true;
+										break;
+									}
+								}
+								if (!bAlreadyDrawn) // for finding depth-8 vertex neighbors: this one only shares a corner
+								{
+									const uint64 NeighborID = (((uint64)1 << D) + (uint64)NextRoot) << LeafDepth | Packed; // for finding depth-8 vertex neighbors: full bisector id
+									int32 NeighborPool = INDEX_NONE; // for finding depth-8 vertex neighbors: pool slot of that id
+									if (IsLiveBisector(NextRoot) && RootBisectors_Buffer[NextRoot].BisectorID == NeighborID) // for finding depth-8 vertex neighbors: all-even leaf stays in the root slot
+									{
+										NeighborPool = NextRoot;
+									}
+									else if (OddsByRootHe.IsValidIndex(NextRoot)) // for finding depth-8 vertex neighbors: other leaves are in this root's odd list
+									{
+										for (const int32 PoolIndex : OddsByRootHe[NextRoot])
+										{
+											if (IsLiveBisector(PoolIndex) && RootBisectors_Buffer[PoolIndex].BisectorID == NeighborID)
+											{
+												NeighborPool = PoolIndex; // for finding depth-8 vertex neighbors: id match
+												break;
+											}
+										}
+									}
+									if (NeighborPool != INDEX_NONE) // for finding depth-8 vertex neighbors: the leaf is allocated
+									{
+										FVector NV0, NV1, NV2; // for finding depth-8 vertex neighbors: corners of the corner-neighbor
+										if (GetBisectorVertices(NeighborPool, NextRoot, NV0, NV1, NV2))
+										{
+											const FVector NDir = (NV0 + NV1 + NV2).GetSafeNormal(); // for finding depth-8 vertex neighbors: centroid on the unit sphere
+											const FVector NWorld = Xf.TransformPosition(NDir * BestDebugRadius); // for finding depth-8 vertex neighbors: centroid in world
+											const float NRadius = FVector::Dist(NDir, NV0) * BestDebugRadius * 0.35f; // for finding depth-8 vertex neighbors: sphere sized to that triangle
+											DrawDebugSphere(GetWorld(), NWorld, NRadius, 10, FColor::Cyan, false, 0.15f); // for finding depth-8 vertex neighbors: corner neighbor, not an edge neighbor
+											++VertexNeighbors;
+										}
+									}
+									DrawnDepth8.Add(TPair<int32, uint64>(NextRoot, Packed)); // for finding depth-8 vertex neighbors: do not draw this triangle again from another corner
+								}
+								CurEdge = OtherEdgeOnVertex(NextVertex, NeighborEdge); // for finding depth-8 vertex neighbors: leave by the other edge on this corner
+								CurRoot = NextRoot; // for finding depth-8 vertex neighbors: step into that triangle
+								CurVertex = NextVertex;
+								for (int32 i = 0; i < LeafDepth; ++i) // for finding depth-8 vertex neighbors: take that triangle's split bits
+								{
+									CurBits[i] = Neighbor.Bits[i];
+								}
+							}
+						}
+					}
+					//==========================================================================================================
+					// END DEPTH-8 VERTEX NEIGHBORS
+					//==========================================================================================================
 				}
 				if (GEngine)
 				{
 					GEngine->AddOnScreenDebugMessage(2, 0.15f, FColor::White,
-						FString::Printf(TEXT("Closest depth-8  pool %d  pawnToCentroid %.1f  same-root %d  cell-roots %d"),
-							BestPool, FMath::Sqrt(BestDistSq), SameRootNeighbors, AdjacentRootNeighbors)); // for finding depth-8 neighbors: show both neighbor counts
+						FString::Printf(TEXT("Closest depth-8  pool %d  pawnToCentroid %.1f  same-root %d  cell-roots %d  vertex %d"),
+							BestPool, FMath::Sqrt(BestDistSq), SameRootNeighbors, AdjacentRootNeighbors, VertexNeighbors)); // for finding depth-8 neighbors: edge counts plus corner-only count
 				}
 				//==========================================================================================================
 				// END DEPTH-8 NEIGHBORS

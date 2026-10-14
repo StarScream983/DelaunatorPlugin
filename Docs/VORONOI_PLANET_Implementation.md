@@ -1237,3 +1237,57 @@ void TwoProduct(float A, float B, out float Hi, out float Lo)
 Desktop GPUs do have 64-bit float. On a consumer card it runs at a small fraction of 32-bit rate, often 1/32 or 1/64, which is why the rest of the shader stays in the high/low float pair. This uses one double fused multiply-add per axis, per vertex, then throws the double away.
 
 That cast is there because this shader’s `fma` only matched a double overload, which is what failed the compile. The float intrinsic is `mad`. I can switch `TwoProduct` to `mad` so the shader has no 64-bit ops at all.
+
+---
+
+## 2026-10-14 — Depth-8 neighbor walk, Python checks
+
+These two runs are what `EdgeNeighborAt` and the corner walk in `GeoDelaunatorComponent.cpp` were checked against. Both build the triangle the same way the bisector split does: bit 0 sets `V1 = V2`, `V2 = mid(V0, V1)`; bit 1 sets `V0 = V2`, `V2 = mid(V0, V1)`. Edge 0 is `V0–V1`, edge 1 is `V0–V2`, edge 2 is `V1–V2`. A walk that reaches the root base returns no neighbor.
+
+### Edge neighbor
+
+Three fans share one centroid `C = normalize(1, 1, 1)`.
+
+| Fan | Corners |
+|-----|---------|
+| −1 | `(1,0,0)`, `(0,1,0)`, `C` |
+| 0 | `(0,1,0)`, `(0,0,1)`, `C` |
+| +1 | `(0,0,1)`, `(−1,0,0)`, `C` |
+
+Every bit pattern of fan 0, at depth 2, 4, and 8. For each of its three edges, the walk’s `(fan, bits, edge)` is compared with the triangle that geometrically owns that same edge. Vertices are matched after rounding to 6 decimals.
+
+The first half rule was wrong: the `V0` half of a base was given to the bit-0 child. That run missed.
+
+| Depth | Edges checked | Mismatches |
+|-------|---------------|------------|
+| 2 | 12 | 4 |
+| 4 | 48 | 20 |
+| 8 | 768 | 368 |
+
+The passing rule is the swap. The `V0` half lands on the neighbor’s bit-1 child as its edge 2. The `V1` half lands on the bit-0 child as its edge 1. Same three depths, same 12 / 48 / 768 edges: **0 mismatches**.
+
+### Corner walk
+
+Two checks. The first is which end of the shared edge stays which end. All 256 depth-8 patterns of fan 0, both ends of every edge that has a neighbor: **1504 ends**. 16 of the 768 edges are the Voronoi border and are not in that count.
+
+Assuming the low end always stays the low end failed **480** of those 1504. Classifying each crossing as “ends kept” or “ends swapped” left **0** that were neither:
+
+| From edge | To edge | Ends | Fan | Count |
+|-----------|---------|------|-----|-------|
+| 2 | 1 | kept | same | 240 |
+| 0 | 0 | swapped | same | 240 |
+| 1 | 2 | kept | same | 240 |
+| 1 | 2 | kept | adjacent | 16 |
+| 2 | 1 | kept | adjacent | 16 |
+
+So a base-to-base crossing swaps the two ends. Every other crossing keeps them. The 16 and 16 are the depth-8 triangles that still sit on a root side edge.
+
+The second check walks around each corner and compares that set with every leaf that shares a rounded vertex. Six fans in a ring around `(0, 0, 1)`, bases 60° apart. Rounding is 5 decimals. The walk stops at the border or when it returns to the start triangle.
+
+| Depth | Trials | Seed | Mismatches |
+|-------|--------|------|------------|
+| 4 | 40, random triangles on the 6-fan ring | 1 | 0 |
+| 8 | 8, same ring | 2 | 0 |
+
+Depth 8 was sampled, not enumerated. Six fans at depth 8 is 1536 leaves, and the geometric side checks every one of them per trial.
+

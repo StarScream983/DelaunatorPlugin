@@ -1,0 +1,2 @@
+# GOALS:
+rewrite FOL_v10 html, to simulate foliage distribution over triangular spatial hash, minor foliage needs to be aware of major foliage so it can compute position and be assigned to a triangle, later characters position will be passed in order to have some character foliage displacement, minor foliage minimum interaction.

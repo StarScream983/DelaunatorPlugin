@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<title>FOL v1.11</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0c10; color:#ddd; font-family:monospace; display:flex; height:100vh; }
+aside { width:260px; flex-shrink:0; background:#111418; border-right:1px solid #222; padding:14px; display:flex; flex-direction:column; gap:7px; font-size:12px; overflow-y:auto; }
+#cvwrap { flex:1; padding:6px; }
+canvas { width:100%; height:100%; display:block; }
+.sec { color:#6af; font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-top:4px; }
+label { display:flex; justify-content:space-between; color:#888; margin-bottom:2px; }
+label b { color:#6af; }
+input[type=range] { width:100%; accent-color:#6af; }
+</style>
+</head>
+<body>
+<aside>
+  <div class="sec">Base tris</div>
+  <div><label>Columns <b id="vCols">3</b></label>
+    <input id="slCols" type="range" min="1" max="10" value="3" step="1"></div>
+  <div><label>Rows <b id="vRows">2</b></label>
+    <input id="slRows" type="range" min="1" max="10" value="2" step="1"></div>
+  <div class="sec">Major foliage</div>
+</aside>
+<div id="cvwrap"><canvas id="cv"></canvas></div>
+<script>
+const cv = document.getElementById('cv');
+const g = cv.getContext('2d');
+let tris = [];
+
+function makeTri(v) {
+  return { v: v, child: null };
+}
+
+function build() {
+  const W = cv.width, H = cv.height;
+  const margin = 24;
+  const cols = +document.getElementById('slCols').value;
+  const rows = +document.getElementById('slRows').value;
+  const cell = Math.min((W - margin * 2) / cols, (H - margin * 2) / rows);
+  const x0 = (W - cols * cell) * 0.5;
+  const y0 = (H - rows * cell) * 0.5;
+  const verts = [];
+  for (let r = 0; r <= rows; r++) {
+    const row = [];
+    for (let c = 0; c <= cols; c++) row.push({ x: x0 + c * cell, y: y0 + r * cell });
+    verts.push(row);
+  }
+  tris = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const tl = verts[r][c];
+      const tr = verts[r][c + 1];
+      const br = verts[r + 1][c + 1];
+      const bl = verts[r + 1][c];
+      tris.push(makeTri([tl, br, bl]));
+      tris.push(makeTri([tl, tr, br]));
+    }
+  }
+}
+
+function poly(t) {
+  g.beginPath();
+  g.moveTo(t.v[0].x, t.v[0].y);
+  g.lineTo(t.v[1].x, t.v[1].y);
+  g.lineTo(t.v[2].x, t.v[2].y);
+  g.closePath();
+}
+
+function draw() {
+  const W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = '#0a0c10';
+  g.fillRect(0, 0, W, H);
+  for (const t of tris) {
+    poly(t);
+    g.fillStyle = '#12180e';
+    g.fill();
+    g.lineWidth = 1;
+    g.strokeStyle = '#314356';
+    g.stroke();
+  }
+}
+
+function resize() {
+  const r = cv.parentElement.getBoundingClientRect();
+  cv.width = Math.max(320, r.width);
+  cv.height = Math.max(280, r.height);
+  build();
+  draw();
+}
+
+[['slCols', 'vCols'], ['slRows', 'vRows']].forEach(([sid, vid]) => {
+  const sl = document.getElementById(sid);
+  const vl = document.getElementById(vid);
+  sl.addEventListener('input', () => { vl.textContent = sl.value; resize(); });
+});
+window.addEventListener('resize', resize);
+resize();
+</script>
+</body>
+</html>

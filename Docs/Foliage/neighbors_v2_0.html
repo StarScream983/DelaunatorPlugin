@@ -35,6 +35,12 @@ canvas { width:100%; height:100%; display:block; }
     <label><span>Noise size <b id="vNoise">140</b></span>
       <input id="slNoise" type="range" min="40" max="400" value="140" step="10">
     </label>
+    <label><span>Offset X <b id="vOffX">0</b></span>
+      <input id="slOffX" type="range" min="-400" max="400" value="0" step="10">
+    </label>
+    <label><span>Offset Y <b id="vOffY">0</b></span>
+      <input id="slOffY" type="range" min="-400" max="400" value="0" step="10">
+    </label>
     <div id="counter">Tests for this triangle: —</div>
     <div id="bases">A 0 · B 0 · C 0 · D 0 · E 0 · F 0</div>
   </div>
@@ -55,6 +61,7 @@ let capped = false;
 let counting = false;
 let leafCount = 0;
 let noiseMap = null;
+let noiseOffset = { x: 0, y: 0 };
 
 function hash(n) {
   n = (n ^ 61) ^ (n >>> 16);
@@ -75,14 +82,19 @@ function makeNoise(W, H, cellSz, seed) {
   const rows = Math.ceil(H / cellSz) + 2;
   const grid = new Float32Array(cols * rows);
   for (let i = 0; i < grid.length; i++) grid[i] = Math.pow(hash(seed + i * 1000003 + seed * 997), 2.2);
-  return { grid, cols, cellSz };
+  return { grid, cols, rows, cellSz };
+}
+function wrapCell(i, n) {
+  return ((i % n) + n) % n;
 }
 function sampleNoise(ng, x, y) {
   const gx = x / ng.cellSz, gy = y / ng.cellSz;
-  const ix = Math.floor(gx) | 0, iy = Math.floor(gy) | 0;
-  const fx = gx - ix, fy = gy - iy, c = ng.cols;
-  const v00 = ng.grid[iy * c + ix] || 0, v10 = ng.grid[iy * c + ix + 1] || 0;
-  const v01 = ng.grid[(iy + 1) * c + ix] || 0, v11 = ng.grid[(iy + 1) * c + ix + 1] || 0;
+  const ix = Math.floor(gx), iy = Math.floor(gy);
+  const fx = gx - ix, fy = gy - iy, c = ng.cols, r = ng.rows;
+  const x0 = wrapCell(ix, c), x1 = wrapCell(ix + 1, c);
+  const y0 = wrapCell(iy, r), y1 = wrapCell(iy + 1, r);
+  const v00 = ng.grid[y0 * c + x0], v10 = ng.grid[y0 * c + x1];
+  const v01 = ng.grid[y1 * c + x0], v11 = ng.grid[y1 * c + x1];
   const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
   return v00 * (1 - ux) * (1 - uy) + v10 * ux * (1 - uy) + v01 * (1 - ux) * uy + v11 * ux * uy;
 }
@@ -392,7 +404,7 @@ function uniformLevels(n) {
 function lodSplit(t, depth, maxD, steps) {
   if (depth >= maxD) return;
   const c = centroid(t);
-  const band = stepNoise(sampleNoise(noiseMap, c.x, c.y), steps);
+  const band = stepNoise(sampleNoise(noiseMap, c.x + noiseOffset.x, c.y + noiseOffset.y), steps);
   const target = Math.round((band / (steps - 1)) * maxD);
   if (depth >= target) return;
   split(t);
@@ -426,13 +438,13 @@ function build() {
   const y1 = y0 - height;
   const y2 = y0 + height;
   mirrorY = y0;
-  const P0 = { x:x0, y:y0 };
-  const P1 = { x:x0 + side * 0.5, y:y1 };
-  const P2 = { x:x0 + side, y:y0 };
-  const P3 = { x:x0 + side * 1.5, y:y1 };
-  const P4 = { x:x0 + side * 2, y:y0 };
-  const P1b = { x:P1.x, y:y2 };
-  const P3b = { x:P3.x, y:y2 };
+  const P0 = { x:x0, y:y0, name:'P0' };
+  const P1 = { x:x0 + side * 0.5, y:y1, name:'P1' };
+  const P2 = { x:x0 + side, y:y0, name:'P2' };
+  const P3 = { x:x0 + side * 1.5, y:y1, name:'P3' };
+  const P4 = { x:x0 + side * 2, y:y0, name:'P4' };
+  const P1b = { x:P1.x, y:y2, name:'P1b' };
+  const P3b = { x:P3.x, y:y2, name:'P3b' };
   const A = makeTri([P0, P2, P1], 'A', 0);
   const B = makeTri([P2, P3, P1], 'B', 0);
   const C = makeTri([P2, P4, P3], 'C', 0);
@@ -448,6 +460,8 @@ function build() {
   bindShared(C, F);
   uniformLevels(+document.getElementById('slBase').value);
   const cell = +document.getElementById('slNoise').value;
+  noiseOffset.x = +document.getElementById('slOffX').value;
+  noiseOffset.y = +document.getElementById('slOffY').value;
   noiseMap = makeNoise(W, H, cell, SEED);
   const lod = +document.getElementById('slLod').value;
   const steps = +document.getElementById('slSteps').value;
@@ -501,6 +515,33 @@ function centroid(t) {
   return { x:(t.v[0].x + t.v[1].x + t.v[2].x) / 3, y:(t.v[0].y + t.v[1].y + t.v[2].y) / 3 };
 }
 
+function drawBaseMarks(b) {
+  const c = centroid(b);
+  g.lineWidth = 3;
+  g.strokeStyle = '#f2f6fb';
+  poly(b);
+  g.stroke();
+  g.font = '13px monospace';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  for (let i = 0; i < 3; i++) {
+    const p = b.v[i];
+    const q = b.v[(i + 1) % 3];
+    g.beginPath();
+    g.fillStyle = '#f2f6fb';
+    g.arc(p.x, p.y, 5, 0, Math.PI * 2);
+    g.fill();
+    const dx = p.x - c.x, dy = p.y - c.y;
+    const len = Math.hypot(dx, dy) || 1;
+    g.fillText(p.name, p.x + (dx / len) * 18, p.y + (dy / len) * 18);
+    const mx = (p.x + q.x) * 0.5, my = (p.y + q.y) * 0.5;
+    const ex = mx - c.x, ey = my - c.y;
+    const el = Math.hypot(ex, ey) || 1;
+    g.fillStyle = '#9ec4e4';
+    g.fillText(p.name + '-' + q.name, mx + (ex / el) * 16, my + (ey / el) * 16);
+  }
+}
+
 function draw() {
   const W = cv.width, H = cv.height;
   g.clearRect(0, 0, W, H);
@@ -549,6 +590,10 @@ function draw() {
     const y = far.reduce((s, p) => s + p.y, 0) / far.length;
     g.fillText(b.base, x, y + (y < mirrorY ? -16 : 16));
   }
+  if (hover) {
+    const b = bases.find((t) => t.base === hover.base);
+    if (b) drawBaseMarks(b);
+  }
 }
 
 function resize() {
@@ -566,7 +611,7 @@ cv.addEventListener('mousemove', (ev) => {
   if (next !== hover) { hover = next; draw(); }
 });
 cv.addEventListener('mouseleave', () => { hover = null; draw(); });
-[['slBase', 'vBase'], ['slLod', 'vLod'], ['slSteps', 'vSteps'], ['slNoise', 'vNoise']].forEach(([sid, vid]) => {
+[['slBase', 'vBase'], ['slLod', 'vLod'], ['slSteps', 'vSteps'], ['slNoise', 'vNoise'], ['slOffX', 'vOffX'], ['slOffY', 'vOffY']].forEach(([sid, vid]) => {
   const sl = document.getElementById(sid);
   const vl = document.getElementById(vid);
   sl.addEventListener('input', () => { vl.textContent = sl.value; resize(); });
