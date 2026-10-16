@@ -17,6 +17,9 @@ input[type=range] { width:100%; accent-color:#6af; }
 .bands .track { position:absolute; left:0; right:0; top:7px; height:4px; background:#2a3040; border-radius:2px; }
 .bands .knob { position:absolute; top:2px; width:14px; height:14px; transform:translateX(-50%); border-radius:50%; background:#6af; cursor:pointer; }
 select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; padding:6px 8px; border-radius:5px; font-family:monospace; font-size:12px; }
+.pair { display:flex; gap:8px; }
+.pair > div { flex:1; min-width:0; }
+.pair input { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; padding:6px 8px; border-radius:5px; font-family:monospace; font-size:12px; }
 #baseTri { color:#9ec4e4; font-size:13px; margin-top:4px; }
 .toggle-row { display:flex; align-items:center; justify-content:space-between; padding:3px 0; color:#778; font-size:11px; }
 .sw { position:relative; width:36px; height:18px; flex-shrink:0; margin:0; display:block; }
@@ -49,7 +52,16 @@ select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; p
     <option value="trees">Trees</option>
     <option value="boulders">Boulders</option>
   </select>
+  <div class="pair">
+    <div><label>Trees</label><input id="inTrees" type="number" value="12" min="4" max="20" step="2"></div>
+    <div><label>Rocks</label><input id="inRocks" type="number" value="8" min="4" max="20" step="2"></div>
+  </div>
   <div class="sec">Subdiv noise</div>
+  <select id="subKind">
+    <option value="value" selected>Value</option>
+    <option value="perlin">Perlin</option>
+    <option value="simplex">Simplex</option>
+  </select>
   <div><label>Subdiv Noise Size <b id="vSubNoise">140</b></label>
     <input id="slSubNoise" type="range" min="40" max="400" value="140" step="10"></div>
   <div><label>Offset X <b id="vSubOffX">0</b></label>
@@ -57,6 +69,11 @@ select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; p
   <div><label>Offset Y <b id="vSubOffY">0</b></label>
     <input id="slSubOffY" type="range" min="-400" max="400" value="0" step="10"></div>
   <div class="sec">Trees</div>
+  <select id="treeKind">
+    <option value="value" selected>Value</option>
+    <option value="perlin">Perlin</option>
+    <option value="simplex">Simplex</option>
+  </select>
   <div><label>Density steps <b id="vTreeSteps">4</b></label>
     <input id="slTreeSteps" type="range" min="2" max="8" value="4" step="1">
     <div id="treeBands" class="bands"></div></div>
@@ -67,6 +84,11 @@ select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; p
   <div><label>Offset Y <b id="vTreeOffY">0</b></label>
     <input id="slTreeOffY" type="range" min="-400" max="400" value="0" step="10"></div>
   <div class="sec">Boulders</div>
+  <select id="boulKind">
+    <option value="value" selected>Value</option>
+    <option value="perlin">Perlin</option>
+    <option value="simplex">Simplex</option>
+  </select>
   <div><label>Density steps <b id="vBoulSteps">4</b></label>
     <input id="slBoulSteps" type="range" min="2" max="8" value="4" step="1">
     <div id="boulBands" class="bands"></div></div>
@@ -96,9 +118,9 @@ const BAND_HOST = { subdiv: 'subBands', trees: 'treeBands', boulders: 'boulBands
 const corner = [[1, 2], [2, 0], [0, 1]];
 const NOISE_SEED = 0xABCD1234;
 const NOISE_KIND = {
-  subdiv:   { seed: 0x51BD5101, col: [120, 170, 210], steps: 'slLod',       size: 'slSubNoise',  ox: 'slSubOffX',  oy: 'slSubOffY' },
-  trees:    { seed: 0xA1B2C3D4, col: [58, 154, 80],   steps: 'slTreeSteps', size: 'slTreeNoise', ox: 'slTreeOffX', oy: 'slTreeOffY' },
-  boulders: { seed: 0x11223344, col: [138, 96, 48],  steps: 'slBoulSteps', size: 'slBoulNoise', ox: 'slBoulOffX', oy: 'slBoulOffY' }
+  subdiv:   { seed: 0x51BD5101, col: [120, 170, 210], steps: 'slLod',       size: 'slSubNoise',  ox: 'slSubOffX',  oy: 'slSubOffY',  kind: 'subKind' },
+  trees:    { seed: 0xA1B2C3D4, col: [58, 154, 80],   steps: 'slTreeSteps', size: 'slTreeNoise', ox: 'slTreeOffX', oy: 'slTreeOffY', kind: 'treeKind' },
+  boulders: { seed: 0x11223344, col: [138, 96, 48],  steps: 'slBoulSteps', size: 'slBoulNoise', ox: 'slBoulOffX', oy: 'slBoulOffY', kind: 'boulKind' }
 };
 
 function makeTri(v, id, depth) {
@@ -224,15 +246,26 @@ function hash(n) {
   n = Math.imul(n, 0x27d4eb2d); n ^= n >>> 15;
   return (n >>> 0) / 4294967296;
 }
-function makeNoise(W, H, cellSz, seed) {
+function makeNoise(W, H, cellSz, seed, kind) {
   const cols = Math.ceil(W / cellSz) + 2;
   const rows = Math.ceil(H / cellSz) + 2;
+  if (kind === 'perlin') {
+    const gx = new Float32Array(cols * rows);
+    const gy = new Float32Array(cols * rows);
+    for (let i = 0; i < gx.length; i++) {
+      const a = hash(seed + i * 1000003 + seed * 997) * Math.PI * 2;
+      gx[i] = Math.cos(a);
+      gy[i] = Math.sin(a);
+    }
+    return { kind, gx, gy, cols, rows, cellSz };
+  }
+  if (kind === 'simplex') return { kind, seed, cellSz };
   const grid = new Float32Array(cols * rows);
   for (let i = 0; i < grid.length; i++) grid[i] = Math.pow(hash(seed + i * 1000003 + seed * 997), 2.2);
-  return { grid, cols, rows, cellSz };
+  return { kind: 'value', grid, cols, rows, cellSz };
 }
 function wrapCell(i, n) { return ((i % n) + n) % n; }
-function sampleNoise(ng, x, y) {
+function sampleValue(ng, x, y) {
   const gx = x / ng.cellSz, gy = y / ng.cellSz;
   const ix = Math.floor(gx), iy = Math.floor(gy);
   const fx = gx - ix, fy = gy - iy, c = ng.cols, r = ng.rows;
@@ -242,6 +275,55 @@ function sampleNoise(ng, x, y) {
   const v01 = ng.grid[y1 * c + x0], v11 = ng.grid[y1 * c + x1];
   const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
   return v00 * (1 - ux) * (1 - uy) + v10 * ux * (1 - uy) + v01 * (1 - ux) * uy + v11 * ux * uy;
+}
+// Classic 2D Perlin. Unit-gradient dots peak near 1/sqrt(2), so scale back into 0..1.
+function samplePerlin(ng, x, y) {
+  const gx = x / ng.cellSz, gy = y / ng.cellSz;
+  const ix = Math.floor(gx), iy = Math.floor(gy);
+  const fx = gx - ix, fy = gy - iy, c = ng.cols, r = ng.rows;
+  const x0 = wrapCell(ix, c), x1 = wrapCell(ix + 1, c);
+  const y0 = wrapCell(iy, r), y1 = wrapCell(iy + 1, r);
+  const dot = (xi, yi, dx, dy) => {
+    const i = yi * c + xi;
+    return ng.gx[i] * dx + ng.gy[i] * dy;
+  };
+  const ux = fx * fx * fx * (fx * (fx * 6 - 15) + 10);
+  const uy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+  const n00 = dot(x0, y0, fx, fy);
+  const n10 = dot(x1, y0, fx - 1, fy);
+  const n01 = dot(x0, y1, fx, fy - 1);
+  const n11 = dot(x1, y1, fx - 1, fy - 1);
+  const v = n00 * (1 - ux) * (1 - uy) + n10 * ux * (1 - uy) + n01 * (1 - ux) * uy + n11 * ux * uy;
+  return Math.min(1, Math.max(0, v * Math.SQRT2 * 0.5 + 0.5));
+}
+// 2D simplex. 70 is the usual scale that lands near -1..1 before the 0..1 map.
+const SIMPLEX_GRAD = [[1, 1], [-1, 1], [1, -1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]];
+const SIMPLEX_F2 = 0.5 * (Math.sqrt(3) - 1);
+const SIMPLEX_G2 = (3 - Math.sqrt(3)) / 6;
+function sampleSimplex(ng, x, y) {
+  x /= ng.cellSz; y /= ng.cellSz;
+  const s = (x + y) * SIMPLEX_F2;
+  const i = Math.floor(x + s), j = Math.floor(y + s);
+  const t = (i + j) * SIMPLEX_G2;
+  const x0 = x - (i - t), y0 = y - (j - t);
+  const i1 = x0 > y0 ? 1 : 0, j1 = x0 > y0 ? 0 : 1;
+  const x1 = x0 - i1 + SIMPLEX_G2, y1 = y0 - j1 + SIMPLEX_G2;
+  const x2 = x0 - 1 + 2 * SIMPLEX_G2, y2 = y0 - 1 + 2 * SIMPLEX_G2;
+  const contrib = (ix, iy, dx, dy) => {
+    const h = hash(ng.seed + ix * 374761393 + iy * 668265263);
+    const g = SIMPLEX_GRAD[(h * 8) | 0];
+    let tt = 0.5 - dx * dx - dy * dy;
+    if (tt < 0) return 0;
+    tt *= tt;
+    return tt * tt * (g[0] * dx + g[1] * dy);
+  };
+  const v = 70 * (contrib(i, j, x0, y0) + contrib(i + i1, j + j1, x1, y1) + contrib(i + 1, j + 1, x2, y2));
+  return Math.min(1, Math.max(0, v * 0.5 + 0.5));
+}
+function sampleNoise(ng, x, y) {
+  if (ng.kind === 'perlin') return samplePerlin(ng, x, y);
+  if (ng.kind === 'simplex') return sampleSimplex(ng, x, y);
+  return sampleValue(ng, x, y);
 }
 function stepNoise(v, steps, edges) {
   if (edges && edges.length === steps - 1) {
@@ -565,14 +647,24 @@ function majorPoint(t, n) {
 
 function spawnMajors(baseDepth) {
   let n = 1;
+  const treeSteps = +document.getElementById('slTreeSteps').value;
+  const rockSteps = +document.getElementById('slBoulSteps').value;
+  const treeBudget = +document.getElementById('inTrees').value;
+  const rockBudget = +document.getElementById('inRocks').value;
   for (const t of allLeaves()) {
     t.major = null;
     if (t.depth <= baseDepth) continue;
     const p = majorPoint(t, n++);
     const tree = noiseSample('trees', p.x, p.y);
-    const boul = noiseSample('boulders', p.x, p.y);
-    if (tree.band === 0 && boul.band === 0) continue;
-    t.major = { x: p.x, y: p.y, kind: tree.raw >= boul.raw ? 'trees' : 'boulders' };
+    const rock = noiseSample('boulders', p.x, p.y);
+    // Band 1 of 4 on a budget of 12 is 1/4 * 12. The bigger budget score wins.
+    const treeScore = (tree.band / treeSteps) * treeBudget;
+    const rockScore = (rock.band / rockSteps) * rockBudget;
+    if (treeScore === 0 && rockScore === 0) continue;
+    let kind;
+    if (treeScore === rockScore) kind = tree.raw >= rock.raw ? 'trees' : 'boulders';
+    else kind = treeScore > rockScore ? 'trees' : 'boulders';
+    t.major = { x: p.x, y: p.y, kind };
   }
 }
 
@@ -580,7 +672,7 @@ function buildNoise() {
   const W = cv.width, H = cv.height;
   noiseMaps = {};
   for (const [key, cfg] of Object.entries(NOISE_KIND)) {
-    noiseMaps[key] = makeNoise(W, H, +document.getElementById(cfg.size).value, (cfg.seed ^ NOISE_SEED) >>> 0);
+    noiseMaps[key] = makeNoise(W, H, +document.getElementById(cfg.size).value, (cfg.seed ^ NOISE_SEED) >>> 0, document.getElementById(cfg.kind).value);
   }
 }
 
@@ -680,7 +772,27 @@ function resize() {
   const vl = document.getElementById(vid);
   sl.addEventListener('input', () => { vl.textContent = sl.value; resize(); });
 });
+function clampShare(id, commit) {
+  const el = document.getElementById(id);
+  const text = el.value.trim();
+  if (text === '' || text === '-' || text === '.' || text.endsWith('.')) return;
+  const n = Number(text);
+  if (!Number.isFinite(n)) return;
+  if (!commit && n < 4 && /^\d$/.test(text)) return;
+  const c = Math.min(20, Math.max(4, n));
+  if (c !== n) el.value = String(c);
+  spawnMajors(+document.getElementById('slBase').value);
+  draw();
+}
+['inTrees', 'inRocks'].forEach((id) => {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => clampShare(id, false));
+  el.addEventListener('change', () => clampShare(id, true));
+});
 document.getElementById('noiseView').addEventListener('change', draw);
+['subKind', 'treeKind', 'boulKind'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', resize);
+});
 ['tgBase', 'tgLod', 'tgAll', 'tgTrees', 'tgBoul'].forEach((id) => {
   document.getElementById(id).addEventListener('change', draw);
 });
