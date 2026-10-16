@@ -35,13 +35,14 @@ select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; p
   <div><label>Rows <b id="vRows">2</b></label>
     <input id="slRows" type="range" min="1" max="10" value="2" step="1"></div>
   <div><label>Jitter <b id="vJitter">18</b></label>
-    <input id="slJitter" type="range" min="0" max="18" value="18" step="1"></div>
+    <input id="slJitter" type="range" min="0" max="100" value="18" step="1"></div>
   <div id="baseTri">Base Tri: NONE</div>
   <div class="sec">Major foliage</div>
   <div><label>Base Subdivs <b id="vBase">2</b></label>
     <input id="slBase" type="range" min="0" max="4" value="2" step="1"></div>
   <div><label>LOD Depth <b id="vLod">2</b></label>
-    <input id="slLod" type="range" min="0" max="4" value="2" step="1"></div>
+    <input id="slLod" type="range" min="0" max="4" value="2" step="1">
+    <div id="subBands" class="bands"></div></div>
   <select id="noiseView">
     <option value="none">NONE</option>
     <option value="subdiv">Subdiv</option>
@@ -90,8 +91,8 @@ let tris = [];
 let hover = null;
 let noiseMaps = {};
 let stars = new Map();
-const bandEdges = { trees: [], boulders: [] };
-const BAND_HOST = { trees: 'treeBands', boulders: 'boulBands' };
+const bandEdges = { subdiv: [], trees: [], boulders: [] };
+const BAND_HOST = { subdiv: 'subBands', trees: 'treeBands', boulders: 'boulBands' };
 const corner = [[1, 2], [2, 0], [0, 1]];
 const NOISE_SEED = 0xABCD1234;
 const NOISE_KIND = {
@@ -271,8 +272,9 @@ function paintKnobs(key) {
 
 function syncEdges(key) {
   const steps = +document.getElementById(NOISE_KIND[key].steps).value;
-  if (bandEdges[key].length === steps - 1) return;
-  bandEdges[key] = equalEdges(steps);
+  const want = steps < 2 ? 0 : steps - 1;
+  if (bandEdges[key].length === want) return;
+  bandEdges[key] = steps < 2 ? [] : equalEdges(steps);
   paintKnobs(key);
 }
 
@@ -288,7 +290,8 @@ function dragKnob(ev, key, i, knob) {
     const x = Math.min(hi, Math.max(lo, (e.clientX - r.left) / r.width));
     edges[i] = x;
     knob.style.left = (x * 100) + '%';
-    spawnMajors(+document.getElementById('slBase').value);
+    if (key === 'subdiv') build();
+    else spawnMajors(+document.getElementById('slBase').value);
     draw();
   };
   const up = () => {
@@ -313,7 +316,7 @@ function lodSplit(t, depth, maxD) {
     split(t);
     return;
   }
-  const band = stepNoise(raw, maxD);
+  const band = stepNoise(raw, maxD, bandEdges.subdiv);
   const target = Math.round((band / (maxD - 1)) * maxD);
   if (depth >= target) return;
   split(t);
@@ -491,6 +494,7 @@ function build() {
   }
   const baseDepth = +document.getElementById('slBase').value;
   const lodDepth = +document.getElementById('slLod').value;
+  syncEdges('subdiv');
   syncEdges('trees');
   syncEdges('boulders');
   uniformLevels(baseDepth);

@@ -500,7 +500,7 @@ protected:
 	TArray<FIntVector> SphericalTriangles; // TRANSIENT - USED IN ORIGINAL CODE
 	TArray<int32> SphericalTrisFlat; // TRIANGLES BUFFER
 	TArray<TArray<FReverseHE>> ReverseEdgesHash; // TRANSIENT - NOT TO BE SAVED - USED IN GEO_POLYGONS
-	TArray<int32> SphericalHalfEdges; // BUFFER FOR FINDING TRIANGLES WITHOUT LOOPING
+	TArray<int32> SphericalHalfEdges; // Spherical Delaunay triangle half edges, BUFFER FOR FINDING TRIANGLES WITHOUT LOOPING
 
 
 	TArray<FVector2D> Projected2D; // FibonacciPoints after Stereographic Projection
