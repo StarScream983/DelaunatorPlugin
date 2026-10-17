@@ -63,7 +63,7 @@ select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; p
     <option value="simplex">Simplex</option>
   </select>
   <div><label>Subdiv Noise Size <b id="vSubNoise">140</b></label>
-    <input id="slSubNoise" type="range" min="40" max="400" value="140" step="10"></div>
+    <input id="slSubNoise" type="range" min="40" max="2000" value="140" step="10"></div>
   <div><label>Offset X <b id="vSubOffX">0</b></label>
     <input id="slSubOffX" type="range" min="-400" max="400" value="0" step="10"></div>
   <div><label>Offset Y <b id="vSubOffY">0</b></label>
@@ -78,7 +78,7 @@ select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; p
     <input id="slTreeSteps" type="range" min="2" max="8" value="4" step="1">
     <div id="treeBands" class="bands"></div></div>
   <div><label>Noise size <b id="vTreeNoise">140</b></label>
-    <input id="slTreeNoise" type="range" min="40" max="400" value="140" step="10"></div>
+    <input id="slTreeNoise" type="range" min="40" max="2000" value="140" step="10"></div>
   <div><label>Offset X <b id="vTreeOffX">0</b></label>
     <input id="slTreeOffX" type="range" min="-400" max="400" value="0" step="10"></div>
   <div><label>Offset Y <b id="vTreeOffY">0</b></label>
@@ -93,7 +93,7 @@ select { width:100%; background:#1a2030; color:#ccc; border:1px solid #2a3040; p
     <input id="slBoulSteps" type="range" min="2" max="8" value="4" step="1">
     <div id="boulBands" class="bands"></div></div>
   <div><label>Noise size <b id="vBoulNoise">140</b></label>
-    <input id="slBoulNoise" type="range" min="40" max="400" value="140" step="10"></div>
+    <input id="slBoulNoise" type="range" min="40" max="2000" value="140" step="10"></div>
   <div><label>Offset X <b id="vBoulOffX">0</b></label>
     <input id="slBoulOffX" type="range" min="-400" max="400" value="0" step="10"></div>
   <div><label>Offset Y <b id="vBoulOffY">0</b></label>
@@ -645,26 +645,58 @@ function majorPoint(t, n) {
   return contains(t, p) ? p : c;
 }
 
+function finalsOf(t, out) {
+  if (!t.child) { out.push(t); return; }
+  for (const c of t.child) finalsOf(c, out);
+}
+
 function spawnMajors(baseDepth) {
   let n = 1;
   const treeSteps = +document.getElementById('slTreeSteps').value;
   const rockSteps = +document.getElementById('slBoulSteps').value;
   const treeBudget = +document.getElementById('inTrees').value;
   const rockBudget = +document.getElementById('inRocks').value;
-  for (const t of allLeaves()) {
-    t.major = null;
-    if (t.depth <= baseDepth) continue;
-    const p = majorPoint(t, n++);
-    const tree = noiseSample('trees', p.x, p.y);
-    const rock = noiseSample('boulders', p.x, p.y);
-    // Band 1 of 4 on a budget of 12 is 1/4 * 12. The bigger budget score wins.
-    const treeScore = (tree.band / treeSteps) * treeBudget;
-    const rockScore = (rock.band / rockSteps) * rockBudget;
-    if (treeScore === 0 && rockScore === 0) continue;
-    let kind;
-    if (treeScore === rockScore) kind = tree.raw >= rock.raw ? 'trees' : 'boulders';
-    else kind = treeScore > rockScore ? 'trees' : 'boulders';
-    t.major = { x: p.x, y: p.y, kind };
+  for (const t of allLeaves()) t.major = null;
+  for (const base of nodesAt(baseDepth)) {
+    base.treePile = 0;
+    base.rockPile = 0;
+    base.totalPile = 0;
+    if (!base.child) continue;
+    const finals = [];
+    finalsOf(base, finals);
+    const live = [];
+    for (const t of finals) {
+      const p = majorPoint(t, n++);
+      const tree = noiseSample('trees', p.x, p.y);
+      const rock = noiseSample('boulders', p.x, p.y);
+      // Band 1 of 4 on a budget of 12 is 1/4 * 12.
+      t.treeSample = (tree.band / treeSteps) * treeBudget;
+      t.rockSample = (rock.band / rockSteps) * rockBudget;
+      t.pairTotal = t.treeSample + t.rockSample;
+      t.majorAt = p;
+      if (t.pairTotal <= 0) continue;
+      live.push(t);
+      base.treePile += t.treeSample;
+      base.rockPile += t.rockSample;
+    }
+    base.totalPile = base.treePile + base.rockPile;
+    if (!live.length || base.totalPile <= 0) continue;
+    // Quiet totals first. Equals keep the child-walk order.
+    live.sort((a, b) => a.pairTotal - b.pairTotal);
+    const equal = Math.abs(base.treePile - base.rockPile) <= 1e-6;
+    const rocksSmaller = base.rockPile < base.treePile;
+    const lesserKind = rocksSmaller ? 'boulders' : 'trees';
+    const greaterKind = rocksSmaller ? 'trees' : 'boulders';
+    const lesserPile = rocksSmaller ? base.rockPile : base.treePile;
+    let lesserCount = Math.round((lesserPile / base.totalPile) * live.length);
+    if (equal) lesserCount = Math.round(0.5 * live.length);
+    lesserCount = Math.max(0, Math.min(live.length, lesserCount));
+    const lesserAt = new Set();
+    for (let k = 0; k < lesserCount; k++) lesserAt.add(Math.floor(k * live.length / lesserCount));
+    for (let i = 0; i < live.length; i++) {
+      const t = live[i];
+      t.major = { x: t.majorAt.x, y: t.majorAt.y, kind: lesserAt.has(i) ? lesserKind : greaterKind };
+    }
   }
 }
 
